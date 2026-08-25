@@ -366,6 +366,14 @@ function renderDashboard() {
       return Number.isFinite(date.getTime()) && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
     })
     .reduce((total, tx) => total + Number(tx.amount || 0), 0);
+  const monthlyExpense = state.transactions
+    .filter((tx) => {
+      if (tx.type !== "expense") return false;
+      const date = new Date(`${tx.date}T00:00:00`);
+      return Number.isFinite(date.getTime()) && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+    })
+    .reduce((total, tx) => total + Number(tx.amount || 0), 0);
+  const monthlyCashflow = monthlyIncome - monthlyExpense;
   const netWorth = state.accounts.reduce((a, b) => a + Number(b.balance), 0);
   const savingRate = income > 0 ? ((income - expense) / income) * 100 : 0;
   const todayDate = new Date();
@@ -391,9 +399,9 @@ function renderDashboard() {
     }).join("<br>")
     : "Tidak ada tagihan jatuh tempo dalam 3 hari.";
   const series = [
-    { key: "income", label: "Pemasukan", value: Math.max(income, 0), colorClass: "masuk" },
-    { key: "expense", label: "Pengeluaran", value: Math.max(expense, 0), colorClass: "keluar" },
-    { key: "total", label: "Total Rupiah", value: Math.max(netWorth, 0), colorClass: "total" }
+    { key: "income", label: "Pemasukan bulan ini", value: Math.max(monthlyIncome, 0), colorClass: "masuk" },
+    { key: "expense", label: "Pengeluaran bulan ini", value: Math.max(monthlyExpense, 0), colorClass: "keluar" },
+    { key: "total", label: "Arus kas bulan ini", value: Math.max(monthlyCashflow, 0), colorClass: "total" }
   ];
   const activeSeries = series.filter((x) => !dashboardHiddenSeries.has(x.key));
   const usedSeries = activeSeries.length ? activeSeries : series;
@@ -408,7 +416,7 @@ function renderDashboard() {
   const recentTx = state.transactions.slice(0, 5);
   const recentRows = recentTx.map(t => `<button class="activity-row" type="button" data-go-page="transactions"><span class="activity-icon ${t.type}">${t.type === "income" ? icon("income") : icon("expense")}</span><span><strong>${escapeHtml(t.category)}</strong><small>${t.date}${t.note ? ` · ${escapeHtml(t.note)}` : ""}</small></span><b class="${t.type}">${t.type === "income" ? "+" : "−"}${fmt(t.amount)}</b></button>`).join("");
   const goalRows = state.goals.slice(0, 3).map(g => { const progress = g.target > 0 ? Math.min(100, (g.current / g.target) * 100) : 0; return `<div class="goal-mini"><div><strong>${escapeHtml(g.name)}</strong><small>${Math.round(progress)}% tercapai</small></div><span>${fmt(g.current)} / ${fmt(g.target)}</span><div class="progress"><span style="width:${progress}%"></span></div></div>`; }).join("");
-  setContent(`<section class="dashboard-hero"><div><span class="section-kicker">Saldo Dompet Utama</span><h2>${fmt(netWorth)}</h2><p>${savingRate >= 0 ? "Keuanganmu masih terkendali." : "Pengeluaran sedang lebih besar dari pemasukan."}</p></div></section><div class="metrics modern-metrics">${metric("Pemasukan bulan ini", fmt(monthlyIncome))}${metric("Pengeluaran", fmt(expense))}${metric("Rasio menabung", `${savingRate.toFixed(1)}%`)}${metric("Tagihan aktif", `${totalActiveBills}`)}</div><section class="dashboard-grid"><div class="card cashflow-card"><div class="card-title-row"><div><span class="section-kicker">Gambaran keuangan</span><h3>Arus uang</h3></div><button class="text-btn" type="button" data-go-page="reports">Lihat laporan →</button></div><div class="mini-chart"><div class="donut" style="--p1:${p1}%;--p2:${p2}%"></div><div class="chart-legend">${chartRows}</div></div></div><div class="card bill-preview"><div class="card-title-row"><div><span class="section-kicker">Perlu perhatian</span><h3>Tagihan</h3></div><button class="text-btn" type="button" data-go-page="bills">Kelola →</button></div><div class="bill-highlight"><strong>${dueCount ? `${dueCount} segera jatuh tempo` : "Semua aman"}</strong><span>${dueCount ? fmt(dueBillsAmount) : "Tidak ada tagihan dalam 3 hari"}</span></div><p>${activeBillText}</p></div></section><section class="dashboard-grid lower"><div class="card"><div class="card-title-row"><div><span class="section-kicker">Terbaru</span><h3>Aktivitas</h3></div><button class="text-btn" type="button" data-go-page="transactions">Semua →</button></div><div class="activity-list">${recentRows || emptyState("Belum ada transaksi", "Catat pemasukan atau pengeluaran pertamamu.")}</div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">Progres</span><h3>Target keuangan</h3></div><button class="text-btn" type="button" data-go-page="goals">Kelola →</button></div>${goalRows || emptyState("Belum ada target", "Buat target agar tabungan lebih terarah.")}</div></section><div class="fab-wrap"><button id="syncNowBtnFab" class="sync-fab-btn sync-top-btn sync-btn" type="button" aria-label="Sinkron Google Sheet"></button><button class="fab" id="quickFab" type="button" aria-label="Aksi cepat">${icon("plus")}</button><div class="fab-menu"><button data-quick-type="income" title="Tambah pemasukan" aria-label="Tambah pemasukan">${icon("income")}</button><button data-quick-type="expense" title="Tambah pengeluaran" aria-label="Tambah pengeluaran">${icon("expense")}</button></div></div>`);
+  setContent(`<section class="dashboard-hero"><div><span class="section-kicker">Saldo Dompet Utama</span><h2>${fmt(netWorth)}</h2><p>${savingRate >= 0 ? "Keuanganmu masih terkendali." : "Pengeluaran sedang lebih besar dari pemasukan."}</p></div></section><div class="metrics modern-metrics">${metric("Pemasukan bulan ini", fmt(monthlyIncome))}${metric("Pengeluaran", fmt(expense))}${metric("Rasio menabung", `${savingRate.toFixed(1)}%`)}${metric("Tagihan aktif", `${totalActiveBills}`)}</div><section class="dashboard-grid"><div class="card cashflow-card"><div class="card-title-row"><div><span class="section-kicker">Gambaran bulan ini</span><h3>Arus uang</h3></div><button class="text-btn" type="button" data-go-page="reports">Lihat laporan →</button></div><div class="mini-chart"><div class="donut" style="--p1:${p1}%;--p2:${p2}%"></div><div class="chart-legend">${chartRows}</div></div></div><div class="card bill-preview"><div class="card-title-row"><div><span class="section-kicker">Perlu perhatian</span><h3>Tagihan</h3></div><button class="text-btn" type="button" data-go-page="bills">Kelola →</button></div><div class="bill-highlight"><strong>${dueCount ? `${dueCount} segera jatuh tempo` : "Semua aman"}</strong><span>${dueCount ? fmt(dueBillsAmount) : "Tidak ada tagihan dalam 3 hari"}</span></div><p>${activeBillText}</p></div></section><section class="dashboard-grid lower"><div class="card"><div class="card-title-row"><div><span class="section-kicker">Terbaru</span><h3>Aktivitas</h3></div><button class="text-btn" type="button" data-go-page="transactions">Semua →</button></div><div class="activity-list">${recentRows || emptyState("Belum ada transaksi", "Catat pemasukan atau pengeluaran pertamamu.")}</div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">Progres</span><h3>Target keuangan</h3></div><button class="text-btn" type="button" data-go-page="goals">Kelola →</button></div>${goalRows || emptyState("Belum ada target", "Buat target agar tabungan lebih terarah.")}</div></section><div class="fab-wrap"><button id="syncNowBtnFab" class="sync-fab-btn sync-top-btn sync-btn" type="button" aria-label="Sinkron Google Sheet"></button><button class="fab" id="quickFab" type="button" aria-label="Aksi cepat">${icon("plus")}</button><div class="fab-menu"><button data-quick-type="income" title="Tambah pemasukan" aria-label="Tambah pemasukan">${icon("income")}</button><button data-quick-type="expense" title="Tambah pengeluaran" aria-label="Tambah pengeluaran">${icon("expense")}</button></div></div>`);
   const syncFab = document.getElementById("syncNowBtnFab");
   if (syncFab) syncFab.onclick = syncToGoogleSheet;
   renderSyncButtons();
@@ -659,7 +667,15 @@ function renderReports() {
   const byCategory = {};
   state.transactions.filter(t => t.type === "expense").forEach(t => byCategory[t.category] = (byCategory[t.category] || 0) + t.amount);
   const rows = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
-  setContent(`<div class="card"><h3>Pengeluaran Teratas per Kategori</h3>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Kategori</th><th>Total</th></tr></thead><tbody>${rows.map(r => `<tr><td>${r[0]}</td><td>${fmt(r[1])}</td></tr>`).join("")}</tbody></table></div>` : emptyState("Belum ada data laporan", "Masukkan transaksi agar laporan kategori muncul.")}</div><div class="card"><h3>Ekspor / Cadangan</h3><button id="exportJson" class="btn">Ekspor JSON</button><button id="exportCsv" class="btn">Ekspor CSV</button></div>`);
+  const totalIncome = sumTx("income");
+  const now = new Date();
+  const monthlyIncome = state.transactions.filter((tx) => {
+    if (tx.type !== "income") return false;
+    const date = new Date(`${tx.date}T00:00:00`);
+    return Number.isFinite(date.getTime()) && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+  }).reduce((total, tx) => total + Number(tx.amount || 0), 0);
+  const monthLabel = now.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+  setContent(`<div class="metrics report-metrics">${metric("Total pemasukan", fmt(totalIncome))}${metric(`Pemasukan ${monthLabel}`, fmt(monthlyIncome))}</div><div class="card"><h3>Pengeluaran Teratas per Kategori</h3>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Kategori</th><th>Total</th></tr></thead><tbody>${rows.map(r => `<tr><td>${r[0]}</td><td>${fmt(r[1])}</td></tr>`).join("")}</tbody></table></div>` : emptyState("Belum ada data laporan", "Masukkan transaksi agar laporan kategori muncul.")}</div><div class="card"><h3>Ekspor / Cadangan</h3><button id="exportJson" class="btn">Ekspor JSON</button><button id="exportCsv" class="btn">Ekspor CSV</button></div>`);
   document.getElementById("exportJson").onclick = () => download("backup-finance.json", JSON.stringify(state, null, 2), "application/json");
   document.getElementById("exportCsv").onclick = () => {
     const header = "date,type,category,amount,account,note";
