@@ -53,7 +53,8 @@ let syncVisualTimer = null;
 let isSidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
 const loadedPages = new Set();
 const loadingPages = new Set();
-let txVisibleCount = 40;
+const PAGE_SIZE = 10;
+const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1, auditLog: 1 };
 const dashboardHiddenSeries = new Set();
 let pendingDeletedTx = null;
 let pendingDeleteTimer = null;
@@ -162,7 +163,7 @@ function addAudit(action, detail) { state.auditLog.unshift({ id: id(), at: new D
 function setPage(next, push = true) {
   if (!next || next === currentPage) return;
   currentPage = next;
-  if (next === "transactions") txVisibleCount = 40;
+  if (Object.hasOwn(listPages, next)) listPages[next] = 1;
   if (push) {
     pageHistory.push(next);
     if (pageHistory.length > 40) pageHistory = pageHistory.slice(-40);
@@ -274,10 +275,14 @@ function bindGlobal() {
       renderDashboard();
       return;
     }
-    const loadMoreTx = e.target.closest("[data-load-more-tx]");
-    if (loadMoreTx) {
-      txVisibleCount += 40;
-      renderTransactions();
+    const pagination = e.target.closest("[data-list-page]");
+    if (pagination) {
+      const key = pagination.dataset.listPage;
+      const page = Number(pagination.dataset.page || 1);
+      if (Object.hasOwn(listPages, key) && Number.isInteger(page) && page > 0) {
+        listPages[key] = page;
+        render();
+      }
       return;
     }
     const retryBtn = e.target.closest("[data-retry-render]");
@@ -445,10 +450,9 @@ function renderAccounts() {
 }
 
 function renderTransactions() {
-  const visibleRows = state.transactions.slice(0, txVisibleCount);
-  const hasMore = state.transactions.length > txVisibleCount;
+  const { items: visibleRows, controls } = paginate(state.transactions, "transactions");
   const rows = visibleRows.map(t => `<tr><td>${t.date}</td><td>${t.type === "income" ? "Pemasukan" : "Pengeluaran"}</td><td>${t.category}</td><td>${fmt(t.amount)}</td><td><button data-tx-edit="${t.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button><button data-tx-delete="${t.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></td></tr>`).join("");
-  const history = state.transactions.length === 0 ? emptyState("Belum ada transaksi", "Transaksi yang kamu input akan tampil di sini.") : `<div class="table-wrap"><table><thead><tr><th>Tgl</th><th>Tipe</th><th>Kategori</th><th>Nominal</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table></div><div class="list-foot"><small>Menampilkan ${visibleRows.length} dari ${state.transactions.length} transaksi</small>${hasMore ? '<button class="btn ghost" type="button" data-load-more-tx="1">Muat lebih banyak</button>' : ""}</div>`;
+  const history = state.transactions.length === 0 ? emptyState("Belum ada transaksi", "Transaksi yang kamu input akan tampil di sini.") : `<div class="table-wrap"><table><thead><tr><th>Tgl</th><th>Tipe</th><th>Kategori</th><th>Nominal</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table></div><div class="list-foot"><small>${state.transactions.length} transaksi · 10 per halaman</small>${controls}</div>`;
   setContent(`<section class="transaction-layout"><form id="txForm" class="card tx-entry-card"><div class="tx-card-head"><div><span class="section-kicker">Catat aktivitas</span><h3>Transaksi baru</h3></div><span class="wallet-chip">Dompet Utama</span></div><input type="hidden" name="id" value=""><div class="type-switch"><label><input type="radio" name="type" value="expense" checked><span>− Pengeluaran</span></label><label><input type="radio" name="type" value="income"><span>+ Pemasukan</span></label></div><label class="amount-field"><span>Nominal</span><div><b>Rp</b><input name="amount" type="number" inputmode="numeric" placeholder="0" required></div></label><div class="tx-fields"><label>Tanggal<input name="date" type="date" value="${today()}" required></label><label>Kategori<input name="category" list="cats" placeholder="Pilih atau ketik kategori" required></label></div><datalist id="cats">${state.categories.map(c => `<option value="${c}">`).join("")}</datalist><label>Catatan <small>(opsional)</small><textarea name="note" rows="2" placeholder="Tambahkan keterangan singkat"></textarea></label><div class="tx-actions"><button class="btn tx-save">Simpan transaksi</button><button id="cancelTxBtn" class="btn ghost" type="button">Reset</button></div></form><aside class="card import-card"><div class="tx-card-head"><div><span class="section-kicker">Banyak data?</span><h3>Impor transaksi</h3></div><span class="file-badge">CSV</span></div><p>Masukkan transaksi sekaligus menggunakan file spreadsheet.</p><label class="file-drop" for="csvInput"><strong>Pilih file CSV</strong><small>Ketuk untuk mencari file di perangkat</small></label><input id="csvInput" class="visually-hidden" type="file" accept=".csv"><div class="import-actions"><button id="importBtn" class="btn" type="button">Impor sekarang</button><button id="downloadCsvTemplateBtn" class="btn ghost" type="button">Unduh template</button></div><small>Format lama dengan kolom akun tetap didukung.</small></aside></section><section class="card tx-history-card"><div class="tx-card-head"><div><span class="section-kicker">Aktivitas terakhir</span><h3>Riwayat transaksi</h3></div><span class="count-chip">${state.transactions.length} transaksi</span></div>${history}</section>`);
 
   const txForm = document.getElementById("txForm");
@@ -615,7 +619,8 @@ function downloadCsvTemplate() {
 }
 
 function renderBudgets() {
-  setContent(`<div class="grid grid-2"><form id="budgetForm" class="card"><h3>Tambah / Ubah Anggaran</h3><input type="hidden" name="id"><label>Bulan<input name="month" type="month" required></label><label>Kategori<input name="category" required></label><label>Batas<input name="limit" type="number" required></label><button class="btn">Simpan</button></form><div class="card"><h3>Daftar Anggaran</h3>${state.budgets.map(b => { const spent = state.transactions.filter(t => t.type === "expense" && t.category === b.category && t.date.startsWith(b.month)).reduce((a, t) => a + t.amount, 0); const p = b.limit > 0 ? Math.min(100, (spent / b.limit) * 100) : 0; return `<div><p>${b.month} - ${b.category}: ${fmt(spent)}/${fmt(b.limit)} <button data-edit="budgets:${b.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button> <button data-delete="budgets:${b.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></p><div class="progress"><span style="width:${p}%"></span></div></div>`; }).join("") || emptyState("Belum ada anggaran", "Buat anggaran agar batas belanja bisa dipantau.")}</div></div>`);
+  const budgetPage = paginate(state.budgets, "budgets");
+  setContent(`<div class="grid grid-2"><form id="budgetForm" class="card"><h3>Tambah / Ubah Anggaran</h3><input type="hidden" name="id"><label>Bulan<input name="month" type="month" required></label><label>Kategori<input name="category" required></label><label>Batas<input name="limit" type="number" required></label><button class="btn">Simpan</button></form><div class="card"><h3>Daftar Anggaran</h3>${budgetPage.controls}${budgetPage.items.map(b => { const spent = state.transactions.filter(t => t.type === "expense" && t.category === b.category && t.date.startsWith(b.month)).reduce((a, t) => a + t.amount, 0); const p = b.limit > 0 ? Math.min(100, (spent / b.limit) * 100) : 0; return `<div><p>${b.month} - ${b.category}: ${fmt(spent)}/${fmt(b.limit)} <button data-edit="budgets:${b.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button> <button data-delete="budgets:${b.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></p><div class="progress"><span style="width:${p}%"></span></div></div>`; }).join("") || emptyState("Belum ada anggaran", "Buat anggaran agar batas belanja bisa dipantau.")}</div></div>`);
   document.getElementById("budgetForm").onsubmit = (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -633,9 +638,10 @@ function renderBills() {
   const active = enriched.filter(b => !b.paid);
   const activeTotal = active.reduce((sum,b) => sum + Number(b.amount || 0), 0);
   const urgent = active.filter(b => b.daysLeft <= 3).length;
-  const billCards = enriched.map(b => { const status = b.paid ? "paid" : b.daysLeft < 0 ? "late" : b.daysLeft <= 3 ? "soon" : "active"; const statusLabel = b.paid ? "Lunas" : b.daysLeft < 0 ? `Terlambat ${Math.abs(b.daysLeft)} hari` : b.daysLeft === 0 ? "Jatuh tempo hari ini" : `${b.daysLeft} hari lagi`; return `<article class="bill-item ${status}"><div class="bill-main"><span class="bill-icon">${icon("calendar")}</span><div><strong>${escapeHtml(b.name)}</strong><small>${b.dueDate} · ${statusLabel}</small></div></div><div class="bill-amount"><strong>${fmt(b.amount)}</strong><span class="bill-status ${status}">${b.paid ? "Lunas" : statusLabel}</span></div><div class="bill-actions">${b.paid ? "" : `<button class="btn pay-btn" type="button" data-pay="${b.id}">${icon("check")} Tandai lunas</button>`}<button class="icon-btn" type="button" data-edit="bills:${b.id}" title="Ubah">${icon("edit")}</button><button class="icon-btn danger" type="button" data-delete="bills:${b.id}" title="Hapus">${icon("trash")}</button></div></article>`; }).join("");
+  const billPage = paginate(enriched, "bills");
+  const billCards = billPage.items.map(b => { const status = b.paid ? "paid" : b.daysLeft < 0 ? "late" : b.daysLeft <= 3 ? "soon" : "active"; const statusLabel = b.paid ? "Lunas" : b.daysLeft < 0 ? `Terlambat ${Math.abs(b.daysLeft)} hari` : b.daysLeft === 0 ? "Jatuh tempo hari ini" : `${b.daysLeft} hari lagi`; return `<article class="bill-item ${status}"><div class="bill-main"><span class="bill-icon">${icon("calendar")}</span><div><strong>${escapeHtml(b.name)}</strong><small>${b.dueDate} · ${statusLabel}</small></div></div><div class="bill-amount"><strong>${fmt(b.amount)}</strong><span class="bill-status ${status}">${b.paid ? "Lunas" : statusLabel}</span></div><div class="bill-actions">${b.paid ? "" : `<button class="btn pay-btn" type="button" data-pay="${b.id}">${icon("check")} Tandai lunas</button>`}<button class="icon-btn" type="button" data-edit="bills:${b.id}" title="Ubah">${icon("edit")}</button><button class="icon-btn danger" type="button" data-delete="bills:${b.id}" title="Hapus">${icon("trash")}</button></div></article>`; }).join("");
   const formHtml = isBillFormOpen ? `<form id="billForm" class="card bill-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Tagihan baru</span><h3>Tambah tagihan</h3></div><button class="icon-btn" type="button" data-toggle-bill-form="1" aria-label="Tutup">${icon("x")}</button></div><input type="hidden" name="id"><label>Nama tagihan<input name="name" placeholder="Contoh: Internet rumah" required></label><label class="amount-field"><span>Nominal</span><div><b>Rp</b><input name="amount" type="number" inputmode="numeric" placeholder="0" required></div></label><label>Jatuh tempo<input name="dueDate" type="date" required></label><input type="hidden" name="paid" value="false"><div class="bill-form-actions"><button class="btn bill-save">Simpan tagihan</button><button class="btn ghost" type="button" data-toggle-bill-form="1">Batal</button></div></form>` : "";
-  setContent(`<section class="bill-summary"><div><span class="section-kicker">Belum dibayar</span><h2>${fmt(activeTotal)}</h2><p>${active.length} tagihan aktif</p></div><div class="bill-summary-meta"><span><b>${urgent}</b> perlu perhatian</span><span><b>${enriched.filter(b=>b.paid).length}</b> sudah lunas</span></div></section><div class="bill-toolbar"><div><span class="section-kicker">Pembayaran rutin</span><strong>Kelola tagihanmu di satu tempat</strong></div><button class="btn add-bill-btn" type="button" data-toggle-bill-form="1">${isBillFormOpen ? icon("x") : icon("plus")} ${isBillFormOpen ? "Tutup" : "Tambah tagihan"}</button></div>${formHtml}<section class="card bill-list-card full"><div class="card-title-row"><div><span class="section-kicker">Jadwal pembayaran</span><h3>Daftar tagihan</h3></div><span class="count-chip">${state.bills.length} total</span></div><div class="bill-list">${billCards || emptyState("Belum ada tagihan", "Tekan Tambah tagihan untuk membuat tagihan pertamamu.")}</div></section>`);
+  setContent(`<section class="bill-summary"><div><span class="section-kicker">Belum dibayar</span><h2>${fmt(activeTotal)}</h2><p>${active.length} tagihan aktif</p></div><div class="bill-summary-meta"><span><b>${urgent}</b> perlu perhatian</span><span><b>${enriched.filter(b=>b.paid).length}</b> sudah lunas</span></div></section><div class="bill-toolbar"><div><span class="section-kicker">Pembayaran rutin</span><strong>Kelola tagihanmu di satu tempat</strong></div><button class="btn add-bill-btn" type="button" data-toggle-bill-form="1">${isBillFormOpen ? icon("x") : icon("plus")} ${isBillFormOpen ? "Tutup" : "Tambah tagihan"}</button></div>${formHtml}<section class="card bill-list-card full"><div class="card-title-row"><div><span class="section-kicker">Jadwal pembayaran</span><h3>Daftar tagihan</h3></div><span class="count-chip">${state.bills.length} total</span></div><div class="bill-list">${billCards || emptyState("Belum ada tagihan", "Tekan Tambah tagihan untuk membuat tagihan pertamamu.")}</div>${billPage.controls}</section>`);
   const billForm = document.getElementById("billForm");
   if (!billForm) return;
   billForm.onsubmit = (e) => {
@@ -651,7 +657,8 @@ function renderBills() {
 }
 
 function renderGoals() {
-  setContent(`<div class="grid grid-2"><form id="goalForm" class="card"><h3>Tambah / Ubah Target</h3><input type="hidden" name="id"><label>Nama Target<input name="name" required></label><label>Target<input name="target" type="number" required></label><label>Saat Ini<input name="current" type="number" value="0" required></label><label>Batas Waktu<input name="deadline" type="date" required></label><button class="btn">Simpan</button></form><div class="card"><h3>Daftar Target</h3>${state.goals.map(g => { const p = Math.min(100, (g.current / g.target) * 100); return `<div><p>${g.name} (${g.deadline}): ${fmt(g.current)}/${fmt(g.target)} <button data-edit="goals:${g.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button> <button data-delete="goals:${g.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></p><div class="progress"><span style="width:${p}%"></span></div></div>`; }).join("") || emptyState("Belum ada target", "Tambahkan target untuk memantau pencapaian.")}</div></div>`);
+  const goalPage = paginate(state.goals, "goals");
+  setContent(`<div class="grid grid-2"><form id="goalForm" class="card"><h3>Tambah / Ubah Target</h3><input type="hidden" name="id"><label>Nama Target<input name="name" required></label><label>Target<input name="target" type="number" required></label><label>Saat Ini<input name="current" type="number" value="0" required></label><label>Batas Waktu<input name="deadline" type="date" required></label><button class="btn">Simpan</button></form><div class="card"><h3>Daftar Target</h3>${goalPage.controls}${goalPage.items.map(g => { const p = Math.min(100, (g.current / g.target) * 100); return `<div><p>${g.name} (${g.deadline}): ${fmt(g.current)}/${fmt(g.target)} <button data-edit="goals:${g.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button> <button data-delete="goals:${g.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></p><div class="progress"><span style="width:${p}%"></span></div></div>`; }).join("") || emptyState("Belum ada target", "Tambahkan target untuk memantau pencapaian.")}</div></div>`);
   document.getElementById("goalForm").onsubmit = (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -686,9 +693,11 @@ function renderReports() {
 
 function renderSettings() {
   const s = state.settings;
+  const historyPage = paginate(s.sourceHistory, "sourceHistory");
+  const auditPage = paginate(state.auditLog, "auditLog");
   const lastSyncedLabel = s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
   const sourceForm = isSourceFormOpen ? `<form id="sourceForm" class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div class="source-form-actions"><button class="btn">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form>` : "";
-  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Penyimpanan</span><h3>Sumber data</h3><p>Google Sheet dan Apps Script sudah terhubung. Detail link disembunyikan agar halaman tetap rapi.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber data"}</button></section>${sourceForm}<div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Riwayat pergantian link</h3>${s.sourceHistory.map(h => `<p>${h.at}: sumber diperbarui (${escapeHtml(h.reason || "tanpa alasan")})</p>`).join("") || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}</div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? state.auditLog.slice(0, 25).map(l => `<p>${l.at} - ${l.action} - ${l.detail || ""}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}</div>`);
+  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Penyimpanan</span><h3>Sumber data</h3><p>Google Sheet dan Apps Script sudah terhubung. Detail link disembunyikan agar halaman tetap rapi.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber data"}</button></section>${sourceForm}<div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Riwayat pergantian link</h3>${historyPage.items.map(h => `<p>${h.at}: sumber diperbarui (${escapeHtml(h.reason || "tanpa alasan")})</p>`).join("") || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}${historyPage.controls}</div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? auditPage.items.map(l => `<p>${l.at} - ${l.action} - ${escapeHtml(l.detail || "")}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}${auditPage.controls}</div>`);
   const form = document.getElementById("sourceForm");
   if (!form) return;
   form.onsubmit = async (e) => {
@@ -1024,6 +1033,14 @@ function renderFatalError(err) {
 
 function findAccount(i) { return state.accounts.find(a => a.id === i); }
 function sumTx(t) { return state.transactions.filter(x => x.type === t).reduce((a, x) => a + Number(x.amount), 0); }
+function paginate(items, key) {
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const page = Math.min(Math.max(1, Number(listPages[key] || 1)), totalPages);
+  listPages[key] = page;
+  const start = (page - 1) * PAGE_SIZE;
+  const controls = items.length > PAGE_SIZE ? `<nav class="pagination" aria-label="Navigasi daftar"><button class="btn ghost" type="button" data-list-page="${key}" data-page="${page - 1}" ${page === 1 ? "disabled" : ""}>← Sebelumnya</button><span>Halaman ${page} dari ${totalPages}</span><button class="btn ghost" type="button" data-list-page="${key}" data-page="${page + 1}" ${page === totalPages ? "disabled" : ""}>Berikutnya →</button></nav>` : "";
+  return { items: items.slice(start, start + PAGE_SIZE), controls };
+}
 function metric(k, v) { return `<div class="metric"><small>${k}</small><h3>${v}</h3></div>`; }
 function setContent(h) { const content = document.getElementById("content"); content.innerHTML = `<div class="grid">${h}</div>`; prepareRupiahInputs(content); }
 function icon(name) { return ICONS[name] || ICONS.settings; }
