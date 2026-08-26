@@ -63,6 +63,8 @@ let isBillFormOpen = false;
 let isSourceFormOpen = false;
 let googleAccessToken = "";
 let autoSyncTimer = null;
+let autoSyncInFlight = false;
+let autoSyncQueued = false;
 
 init();
 
@@ -134,6 +136,7 @@ function normalizeState(raw) {
 function saveState(markDirty = true) {
   if (markDirty) state.settings.hasPendingSync = true;
   localStorage.setItem(DB_KEY, JSON.stringify(state));
+  updateSyncStatusUi();
   if (markDirty && state.settings.storageMode === "google") scheduleAutoSync();
 }
 
@@ -144,14 +147,38 @@ function scheduleAutoSync() {
 
 async function autoSyncToGoogle() {
   if (!googleAccessToken || !state.settings.googleSpreadsheetId || !state.settings.hasPendingSync) return;
+  if (autoSyncInFlight) { autoSyncQueued = true; return; }
+  autoSyncInFlight = true;
   try {
     await syncStateToSpreadsheet(googleAccessToken, state.settings.googleSpreadsheetId, state);
     state.settings.lastSyncedAt = new Date().toISOString();
     state.settings.hasPendingSync = false;
     localStorage.setItem(DB_KEY, JSON.stringify(state));
+    updateSyncStatusUi();
   } catch (error) {
     console.warn("Sinkron otomatis tertunda:", error?.message || error);
+    state.settings.hasPendingSync = true;
+    localStorage.setItem(DB_KEY, JSON.stringify(state));
+    updateSyncStatusUi();
+  } finally {
+    autoSyncInFlight = false;
+    if (autoSyncQueued) {
+      autoSyncQueued = false;
+      scheduleAutoSync();
+    }
   }
+}
+
+function updateSyncStatusUi() {
+  const badge = document.getElementById("syncStatusBadge");
+  const time = document.getElementById("syncLastTime");
+  const caption = document.getElementById("syncStatusCaption");
+  if (badge) {
+    badge.className = `bill-status ${state.settings.hasPendingSync ? "soon" : "paid"}`;
+    badge.textContent = state.settings.hasPendingSync ? "Menunggu" : "Tersinkron";
+  }
+  if (time) time.textContent = state.settings.lastSyncedAt ? new Date(state.settings.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
+  if (caption) caption.textContent = state.settings.hasPendingSync ? "Perubahan akan dikirim otomatis saat koneksi Google tersedia." : "Data lokal dan Google Spreadsheet sudah sama.";
 }
 function id() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -714,7 +741,7 @@ function renderSettings() {
   const auditPage = paginate(state.auditLog, "auditLog");
   const lastSyncedLabel = s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
   const auditRows = state.auditLog.length ? auditPage.items.map(l => `<div class="audit-row"><span class="audit-dot"></span><div><strong>${escapeHtml(l.action)}</strong><small>${new Date(l.at).toLocaleString("id-ID")}</small><p>${escapeHtml(l.detail || "Tanpa detail")}</p></div></div>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.");
-  setContent(`<div class="settings-layout"><section class="settings-account-card card"><div class="settings-account-icon"><span class="google-g">G</span></div><div class="settings-account-copy"><span class="section-kicker">Akun Google</span><h3>Terhubung ke Google</h3><p>Data keuangan tersimpan otomatis di Spreadsheet pribadi milikmu.</p></div><button id="logoutGoogleBtn" class="btn logout-btn" type="button">Keluar</button></section><section class="card settings-sync-card"><div class="card-title-row"><div><span class="section-kicker">Penyimpanan</span><h3>Status sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Menunggu" : "Tersinkron"}</span></div><div class="sync-info-row"><span>Sinkron terakhir</span><strong>${lastSyncedLabel}</strong></div><p class="sync-caption">${s.hasPendingSync ? "Perubahan akan dikirim otomatis saat koneksi Google tersedia." : "Data lokal dan Google Spreadsheet sudah sama."}</p></section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Keamanan</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${state.auditLog.length} aktivitas</span></div><div class="audit-list">${auditRows}</div>${auditPage.controls}</section></div>`);
+  setContent(`<div class="settings-layout"><section class="settings-account-card card"><div class="settings-account-icon"><span class="google-g">G</span></div><div class="settings-account-copy"><span class="section-kicker">Akun Google</span><h3>Terhubung ke Google</h3><p>Data keuangan tersimpan otomatis di Spreadsheet pribadi milikmu.</p></div><button id="logoutGoogleBtn" class="btn logout-btn" type="button">Keluar</button></section><section class="card settings-sync-card"><div class="card-title-row"><div><span class="section-kicker">Penyimpanan</span><h3>Status sinkron</h3></div><span id="syncStatusBadge" class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Menunggu" : "Tersinkron"}</span></div><div class="sync-info-row"><span>Sinkron terakhir</span><strong id="syncLastTime">${lastSyncedLabel}</strong></div><p id="syncStatusCaption" class="sync-caption">${s.hasPendingSync ? "Perubahan akan dikirim otomatis saat koneksi Google tersedia." : "Data lokal dan Google Spreadsheet sudah sama."}</p></section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Keamanan</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${state.auditLog.length} aktivitas</span></div><div class="audit-list">${auditRows}</div>${auditPage.controls}</section></div>`);
   document.getElementById("logoutGoogleBtn").onclick = logoutGoogle;
 }
 
