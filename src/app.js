@@ -1,4 +1,5 @@
-﻿import { parseCsv, validateSheetUrl } from "./utils.js";
+﻿import { validateSheetUrl, parseCsv } from "./utils.js";
+import { createFinanceSpreadsheet, requestGoogleAccessToken, sheetUrl as googleSheetUrl, syncStateToSpreadsheet } from "./googleSheets.js";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -84,7 +85,7 @@ function defaultState() {
     accounts: [{ id: "main-wallet", name: "Dompet Utama", type: "cash", balance: 0, active: true }],
     categories: ["Makan", "Transport", "Tagihan", "Gaji", "Lainnya"],
     transactions: [], budgets: [], bills: [], goals: [], rules: [],
-    settings: { sheetUrl: "", appsScriptUrl: "", lastSourceChangeAt: null, sourceHistory: [], hasPendingSync: false, lastSyncedAt: null },
+    settings: { sheetUrl: "", appsScriptUrl: "", googleSpreadsheetId: "", storageMode: "", lastSourceChangeAt: null, sourceHistory: [], hasPendingSync: false, lastSyncedAt: null },
     auditLog: []
   };
 }
@@ -690,8 +691,10 @@ function renderSettings() {
   const historyPage = paginate(s.sourceHistory, "sourceHistory");
   const auditPage = paginate(state.auditLog, "auditLog");
   const lastSyncedLabel = s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
-  const sourceForm = isSourceFormOpen ? `<form id="sourceForm" class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div class="source-form-actions"><button class="btn">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form>` : "";
-  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Penyimpanan</span><h3>Sumber data</h3><p>Google Sheet dan Apps Script sudah terhubung. Detail link disembunyikan agar halaman tetap rapi.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber data"}</button></section>${sourceForm}<div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Riwayat pergantian link</h3>${historyPage.items.map(h => `<p>${h.at}: sumber diperbarui (${escapeHtml(h.reason || "tanpa alasan")})</p>`).join("") || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}${historyPage.controls}</div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? auditPage.items.map(l => `<p>${l.at} - ${l.action} - ${escapeHtml(l.detail || "")}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}${auditPage.controls}</div>`);
+  const sourceForm = isSourceFormOpen ? `<div class="card source-form collapsible-form"><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> ${s.googleSpreadsheetId ? "Hubungkan ulang Google" : "Hubungkan Google otomatis"}</button><p class="source-divider">atau gunakan konfigurasi manual</p><form id="sourceForm"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div class="source-form-actions"><button class="btn">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form></div>` : "";
+  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Penyimpanan</span><h3>Sumber data</h3><p>${s.storageMode === "google" ? "Terhubung otomatis ke Google Spreadsheet pribadi." : "Google Sheet dan Apps Script terhubung secara manual."} Detail link disembunyikan agar halaman tetap rapi.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber data"}</button></section>${sourceForm}<div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Riwayat pergantian link</h3>${historyPage.items.map(h => `<p>${h.at}: sumber diperbarui (${escapeHtml(h.reason || "tanpa alasan")})</p>`).join("") || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}${historyPage.controls}</div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? auditPage.items.map(l => `<p>${l.at} - ${l.action} - ${escapeHtml(l.detail || "")}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}${auditPage.controls}</div>`);
+  const googleButton = document.getElementById("connectGoogleBtn");
+  if (googleButton) googleButton.onclick = () => connectGoogleStorage(!s.googleSpreadsheetId);
   const form = document.getElementById("sourceForm");
   if (!form) return;
   form.onsubmit = async (e) => {
@@ -704,17 +707,17 @@ function renderSettings() {
 }
 
 function applySetupGateIfNeeded() {
-  const needsSetup = !state.settings.sheetUrl || !state.settings.appsScriptUrl;
+  const needsSetup = state.settings.storageMode === "google" ? !state.settings.googleSpreadsheetId : (!state.settings.sheetUrl || !state.settings.appsScriptUrl);
   const gate = document.getElementById("setupGate");
   if (!needsSetup) {
     gate.classList.add("hidden");
     return;
   }
   gate.classList.remove("hidden");
-  gate.innerHTML = `<form id="firstSetupForm" class="setup-card"><div class="setup-heading"><div><span class="eyebrow">Satu kali setup</span><h2>Hubungkan penyimpananmu</h2></div><a class="tutorial-link" href="./tutorial.html" target="_blank" rel="noopener">Buka tutorial <span aria-hidden="true">↗</span></a></div><p>Masukkan link Google Sheet dan URL Web App Apps Script. Data tetap milikmu dan tersimpan di spreadsheet pribadi.</p><label>Link Google Sheet<input name="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" placeholder="https://script.google.com/macros/s/.../exec" required></label><div class="setup-actions"><button id="testSetupBtn" class="btn ghost" type="button">Uji Koneksi</button><button id="saveSetupBtn" class="btn" type="submit">Simpan & Lanjut</button></div><small id="setupState" class="setup-status">Belum ada koneksi.</small></form>`;
+  gate.innerHTML = `<div class="setup-card google-setup"><div class="setup-heading"><div><span class="eyebrow">Satu kali setup</span><h2>Simpan otomatis ke Google</h2></div></div><p>Hubungkan akun Google. Zigs.fi akan membuat Spreadsheet pribadi secara otomatis—tanpa Apps Script dan tanpa setup manual.</p><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> Hubungkan Google</button><small id="setupState" class="setup-status">Spreadsheet akan tersimpan di Google Drive milikmu.</small><details class="manual-fallback"><summary>Gunakan setup manual</summary><form id="firstSetupForm"><a class="tutorial-link" href="./tutorial.html" target="_blank" rel="noopener">Buka tutorial manual ↗</a><label>Link Google Sheet<input name="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" placeholder="https://script.google.com/macros/s/.../exec" required></label><div class="setup-actions"><button id="testSetupBtn" class="btn ghost" type="button">Uji Koneksi</button><button class="btn" type="submit">Simpan manual</button></div></form></details></div>`;
+  document.getElementById("connectGoogleBtn").onclick = () => connectGoogleStorage(true);
   document.getElementById("testSetupBtn").onclick = async () => {
-    const form = document.getElementById("firstSetupForm");
-    const fd = new FormData(form);
+    const fd = new FormData(document.getElementById("firstSetupForm"));
     const message = document.getElementById("setupState");
     message.textContent = "Menguji koneksi...";
     const test = await validateSetupValues(fd);
@@ -722,13 +725,9 @@ function applySetupGateIfNeeded() {
   };
   document.getElementById("firstSetupForm").onsubmit = async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target);
-    const result = await saveDataSourceFromForm(fd);
+    const result = await saveDataSourceFromForm(new FormData(e.target));
     const message = document.getElementById("setupState");
-    if (!result.ok) {
-      message.textContent = result.message;
-      return;
-    }
+    if (!result.ok) { message.textContent = result.message; return; }
     message.textContent = "Sukses. Memuat halaman utama...";
     gate.classList.add("hidden");
     render();
@@ -764,13 +763,68 @@ async function saveDataSourceFromForm(formData) {
   }
   state.settings.sheetUrl = next;
   state.settings.appsScriptUrl = appsScriptUrl;
+  state.settings.storageMode = "manual";
+  state.settings.googleSpreadsheetId = "";
   state.settings.lastSourceChangeAt = new Date().toISOString();
   saveState();
   return { ok: true };
 }
 
 
+async function connectGoogleStorage(createNew = false) {
+  const message = document.getElementById("setupState");
+  const button = document.getElementById("connectGoogleBtn");
+  if (button) button.disabled = true;
+  if (message) message.textContent = "Membuka login Google...";
+  try {
+    const accessToken = await requestGoogleAccessToken("consent");
+    let spreadsheetId = state.settings.googleSpreadsheetId;
+    if (createNew || !spreadsheetId) {
+      if (message) message.textContent = "Membuat Spreadsheet Zigs.fi...";
+      const spreadsheet = await createFinanceSpreadsheet(accessToken);
+      spreadsheetId = spreadsheet.spreadsheetId;
+    }
+    state.settings.storageMode = "google";
+    state.settings.googleSpreadsheetId = spreadsheetId;
+    state.settings.sheetUrl = googleSheetUrl(spreadsheetId);
+    state.settings.appsScriptUrl = "";
+    state.settings.lastSourceChangeAt = new Date().toISOString();
+    addAudit("connect_google_sheets", spreadsheetId);
+    if (message) message.textContent = "Mengirim data awal...";
+    await syncStateToSpreadsheet(accessToken, spreadsheetId, state);
+    state.settings.lastSyncedAt = new Date().toISOString();
+    state.settings.hasPendingSync = false;
+    saveState(false);
+    document.getElementById("setupGate")?.classList.add("hidden");
+    showToast("Google Spreadsheet berhasil dibuat dan terhubung");
+    render();
+  } catch (error) {
+    if (message) message.textContent = error.message || "Gagal menghubungkan Google";
+    showToast(error.message || "Gagal menghubungkan Google");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function syncToGoogleSheet() {
+  if (state.settings.storageMode === "google") {
+    if (!state.settings.googleSpreadsheetId) { applySetupGateIfNeeded(); return; }
+    setSyncVisual("loading");
+    try {
+      const accessToken = await requestGoogleAccessToken("");
+      await syncStateToSpreadsheet(accessToken, state.settings.googleSpreadsheetId, state);
+      state.settings.lastSyncedAt = new Date().toISOString();
+      state.settings.hasPendingSync = false;
+      addAudit("sync_google_sheets", "success");
+      saveState(false);
+      setSyncVisual("success");
+      showToast("Data tersimpan ke Google Spreadsheet");
+    } catch (error) {
+      setSyncVisual("error");
+      showToast(error.message || "Sinkron Google gagal");
+    }
+    return;
+  }
   const { appsScriptUrl, sheetUrl } = state.settings;
   if (!sheetUrl || !appsScriptUrl) {
     applySetupGateIfNeeded();
