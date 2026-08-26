@@ -2,9 +2,6 @@ export const GOOGLE_CLIENT_ID = "1080886660072-p6m6obifssalemf9ruefv2egid0fqlsd.
 export const GOOGLE_SCOPES = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets";
 export const SHEET_TABS = ["accounts", "transactions", "budgets", "goals", "debts", "settings", "audit_log"];
 
-export function sheetUrl(id) {
-  return `https://docs.google.com/spreadsheets/d/${id}/edit`;
-}
 
 export function stateToSheetValues(state) {
   const settings = Object.entries(state.settings || {}).map(([key, value]) => [key, typeof value === "object" ? JSON.stringify(value) : String(value ?? "")]);

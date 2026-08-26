@@ -1,5 +1,5 @@
-﻿import { validateSheetUrl, parseCsv } from "./utils.js";
-import { createFinanceSpreadsheet, requestGoogleAccessToken, sheetUrl as googleSheetUrl, syncStateToSpreadsheet } from "./googleSheets.js?v=2";
+﻿import { parseCsv } from "./utils.js";
+import { createFinanceSpreadsheet, requestGoogleAccessToken, syncStateToSpreadsheet } from "./googleSheets.js?v=2";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -49,13 +49,12 @@ const state = loadState();
 let currentPage = "dashboard";
 let pageHistory = ["dashboard"];
 let editTxId = null;
-let syncVisualStatus = "idle";
-let syncVisualTimer = null;
+
 let isSidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
 const loadedPages = new Set();
 const loadingPages = new Set();
 const PAGE_SIZE = 10;
-const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1, auditLog: 1 };
+const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, auditLog: 1 };
 const dashboardHiddenSeries = new Set();
 let pendingDeletedTx = null;
 let pendingDeleteTimer = null;
@@ -87,9 +86,13 @@ function defaultState() {
     accounts: [{ id: "main-wallet", name: "Dompet Utama", type: "cash", balance: 0, active: true }],
     categories: ["Makan", "Transport", "Tagihan", "Gaji", "Lainnya"],
     transactions: [], budgets: [], bills: [], goals: [], rules: [],
-    settings: { sheetUrl: "", appsScriptUrl: "", googleSpreadsheetId: "", googleSignedOut: false, storageMode: "", lastSourceChangeAt: null, sourceHistory: [], hasPendingSync: false, lastSyncedAt: null },
+    settings: { googleSpreadsheetId: "", googleSignedOut: false, storageMode: "google", hasPendingSync: false, lastSyncedAt: null },
     auditLog: []
   };
+}
+function extractSpreadsheetId(url) {
+  const match = String(url || "").match(/\/spreadsheets\/d\/([^/]+)/);
+  return match ? match[1] : "";
 }
 function loadState() {
   try {
@@ -110,7 +113,14 @@ function normalizeState(raw) {
     ...base,
     ...s,
     profile: { ...base.profile, ...(s.profile || {}) },
-    settings: { ...base.settings, ...(s.settings || {}) },
+    settings: {
+      ...base.settings,
+      googleSpreadsheetId: String(s.settings?.googleSpreadsheetId || extractSpreadsheetId(s.settings?.sheetUrl) || ""),
+      googleSignedOut: Boolean(s.settings?.googleSignedOut),
+      storageMode: "google",
+      hasPendingSync: Boolean(s.settings?.hasPendingSync),
+      lastSyncedAt: s.settings?.lastSyncedAt || null
+    },
     accounts: [mainAccount],
     categories: Array.isArray(s.categories) && s.categories.length > 0 ? s.categories : base.categories,
     transactions,
@@ -729,43 +739,6 @@ async function logoutGoogle() {
   applySetupGateIfNeeded();
 }
 
-async function validateSetupValues(formData) {
-  const sheetUrl = String(formData.get("sheetUrl") || "").trim();
-  const appsScriptUrl = String(formData.get("appsScriptUrl") || "").trim();
-  if (!validateSheetUrl(sheetUrl)) return { ok: false, message: "Link Google Sheet tidak valid." };
-  if (!appsScriptUrl.startsWith("https://script.google.com/")) return { ok: false, message: "URL Apps Script tidak valid." };
-  try {
-    const ping = await fetch(`${appsScriptUrl}?action=ping`);
-    const data = await ping.json().catch(() => ({}));
-    if (!ping.ok || data.ok === false) return { ok: false, message: data.message || "Ping ke Apps Script gagal." };
-  } catch {
-    return { ok: false, message: "Tidak bisa terhubung ke Apps Script." };
-  }
-  return { ok: true };
-}
-
-async function saveDataSourceFromForm(formData) {
-  const validation = await validateSetupValues(formData);
-  if (!validation.ok) return validation;
-  const next = String(formData.get("sheetUrl") || "").trim();
-  const appsScriptUrl = String(formData.get("appsScriptUrl") || "").trim();
-  const reason = String(formData.get("reason") || "").trim();
-  const old = state.settings.sheetUrl;
-  if (old && old !== next) {
-    download(`backup-before-source-change-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state, null, 2), "application/json");
-    state.settings.sourceHistory.unshift({ at: new Date().toISOString(), old, new: next, reason });
-    addAudit("change_sheet_source", `${old} -> ${next}`);
-  }
-  state.settings.sheetUrl = next;
-  state.settings.appsScriptUrl = appsScriptUrl;
-  state.settings.storageMode = "manual";
-  state.settings.googleSpreadsheetId = "";
-  state.settings.lastSourceChangeAt = new Date().toISOString();
-  saveState();
-  return { ok: true };
-}
-
-
 async function connectGoogleStorage(createNew = false) {
   const message = document.getElementById("setupState");
   const button = document.getElementById("connectGoogleBtn");
@@ -783,9 +756,6 @@ async function connectGoogleStorage(createNew = false) {
     state.settings.storageMode = "google";
     state.settings.googleSignedOut = false;
     state.settings.googleSpreadsheetId = spreadsheetId;
-    state.settings.sheetUrl = googleSheetUrl(spreadsheetId);
-    state.settings.appsScriptUrl = "";
-    state.settings.lastSourceChangeAt = new Date().toISOString();
     addAudit("connect_google_sheets", spreadsheetId);
     if (message) message.textContent = "Mengirim data awal...";
     await syncStateToSpreadsheet(accessToken, spreadsheetId, state);
@@ -803,70 +773,6 @@ async function connectGoogleStorage(createNew = false) {
   }
 }
 
-async function syncToGoogleSheet() {
-  if (state.settings.storageMode === "google") {
-    if (!state.settings.googleSpreadsheetId) { applySetupGateIfNeeded(); return; }
-    setSyncVisual("loading");
-    try {
-      const accessToken = await requestGoogleAccessToken("");
-      googleAccessToken = accessToken;
-      await syncStateToSpreadsheet(accessToken, state.settings.googleSpreadsheetId, state);
-      state.settings.lastSyncedAt = new Date().toISOString();
-      state.settings.hasPendingSync = false;
-      addAudit("sync_google_sheets", "success");
-      saveState(false);
-      setSyncVisual("success");
-      showToast("Data tersimpan ke Google Spreadsheet");
-    } catch (error) {
-      setSyncVisual("error");
-      showToast(error.message || "Sinkron Google gagal");
-    }
-    return;
-  }
-  const { appsScriptUrl, sheetUrl } = state.settings;
-  if (!sheetUrl || !appsScriptUrl) {
-    applySetupGateIfNeeded();
-    setSyncVisual("error");
-    showToast("Isi sumber data dulu sebelum sinkron.");
-    return;
-  }
-  setSyncVisual("loading");
-  try {
-    const params = new URLSearchParams();
-    params.set("payload", JSON.stringify({ action: "sync", sheetUrl, payload: state }));
-    const r = await fetch(appsScriptUrl, { method: "POST", body: params });
-    const text = await r.text();
-    let data = {};
-    try { data = JSON.parse(text); } catch {}
-    if (!r.ok || data.ok === false) {
-      const msg = `Sinkron gagal${data.message ? `: ${data.message}` : ""}`;
-      setSyncVisual("error");
-      showToast(msg);
-      return;
-    }
-    setSyncVisual("success");
-    showToast("Sinkron Google Sheet berhasil");
-    addAudit("sync_google_sheet", "success");
-    state.settings.lastSyncedAt = new Date().toISOString();
-    state.settings.hasPendingSync = false;
-    saveState(false);
-  } catch (err) {
-    const msg = `Sinkron gagal: ${err?.message || "kesalahan jaringan"}`;
-    setSyncVisual("error");
-    showToast(msg);
-  }
-}
-
-function renderSyncButtons() {
-  const buttons = [document.getElementById("syncNowBtnTop"), document.getElementById("syncNowBtnFab")];
-  const iconName = syncVisualStatus === "loading" ? "spinner" : (syncVisualStatus === "success" ? "check" : (syncVisualStatus === "error" ? "x" : "sync"));
-  const showWarningBadge = !!state.settings.hasPendingSync;
-  buttons.forEach((btn) => {
-    if (!btn) return;
-    btn.className = `${btn.id === "syncNowBtnFab" ? "sync-fab-btn " : ""}sync-top-btn sync-btn sync-${syncVisualStatus}`;
-    btn.innerHTML = `<span class="sync-icon">${icon(iconName)}</span>${showWarningBadge ? '<span class="sync-badge" aria-hidden="true">!</span>' : ""}`;
-  });
-}
 
 function renderPageLoading() {
   setContent(`<div class="card"><div class="skeleton-line w-40"></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line w-70"></div></div>`);
@@ -877,17 +783,6 @@ function renderPageError(err) {
   setContent(`<div class="card"><h3>Terjadi galat halaman</h3><p>${escapeHtml(message)}</p><button class="btn" type="button" data-retry-render="1">Coba lagi</button></div>`);
 }
 
-function setSyncVisual(status) {
-  syncVisualStatus = status;
-  renderSyncButtons();
-  if (syncVisualTimer) window.clearTimeout(syncVisualTimer);
-  if (status === "success" || status === "error") {
-    syncVisualTimer = window.setTimeout(() => {
-      syncVisualStatus = "idle";
-      renderSyncButtons();
-    }, 2200);
-  }
-}
 
 function upsertById(kind, payload, action, detail) {
   const list = state[kind];

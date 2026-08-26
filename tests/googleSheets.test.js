@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, SHEET_TABS, sheetUrl, stateToSheetValues } from "../src/googleSheets.js";
+import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, SHEET_TABS, stateToSheetValues } from "../src/googleSheets.js";
 
 test("Google OAuth uses configured public client id and minimum file scopes", async () => {
   assert.equal(GOOGLE_CLIENT_ID, "1080886660072-p6m6obifssalemf9ruefv2egid0fqlsd.apps.googleusercontent.com");
@@ -21,7 +21,7 @@ test("automatic spreadsheet contains the existing application schema", () => {
   });
   assert.deepEqual(values.transactions[0], ["id", "date", "type", "category", "amount", "accountId", "note"]);
   assert.equal(values.transactions[1][4], 1000);
-  assert.equal(sheetUrl("abc"), "https://docs.google.com/spreadsheets/d/abc/edit");
+
 });
 
 test("source contains no Google client secret or durable access token storage", async () => {
