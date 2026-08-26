@@ -1,5 +1,5 @@
 ﻿import { parseCsv } from "./utils.js";
-import { createFinanceSpreadsheet, requestGoogleAccessToken, syncStateToSpreadsheet } from "./googleSheets.js?v=2";
+import { createFinanceSpreadsheet, requestGoogleAccessToken, syncStateToSpreadsheet } from "./googleSheets.js?v=3";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -43,6 +43,7 @@ const ICONS = {
 };
 
 const DB_KEY = "finance_os_v1";
+const GOOGLE_SESSION_KEY = "zigs_google_oauth_session";
 const SIDEBAR_KEY = "finance_os_sidebar_collapsed";
 const REQUIRED_TABS = ["accounts", "transactions", "budgets", "goals", "debts", "settings", "audit_log"];
 const state = loadState();
@@ -61,7 +62,7 @@ let pendingDeleteTimer = null;
 let quickTxType = "";
 let isBillFormOpen = false;
 let isSourceFormOpen = false;
-let googleAccessToken = "";
+let googleAccessToken = loadGoogleSessionToken();
 let autoSyncTimer = null;
 let autoSyncInFlight = false;
 let autoSyncQueued = false;
@@ -77,9 +78,23 @@ function init() {
     applySidebarState();
     applySetupGateIfNeeded();
     render();
+    if (googleAccessToken && state.settings.hasPendingSync) scheduleAutoSync();
   } catch (err) {
     renderFatalError(err);
   }
+}
+
+function loadGoogleSessionToken() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(GOOGLE_SESSION_KEY) || "null");
+    if (!saved?.accessToken || Number(saved.expiresAt || 0) <= Date.now() + 60000) return "";
+    return saved.accessToken;
+  } catch { return ""; }
+}
+
+function saveGoogleSessionToken(accessToken, expiresIn = 3600) {
+  sessionStorage.setItem(GOOGLE_SESSION_KEY, JSON.stringify({ accessToken, expiresAt: Date.now() + Number(expiresIn || 3600) * 1000 }));
+  googleAccessToken = accessToken;
 }
 
 function defaultState() {
@@ -761,6 +776,7 @@ async function logoutGoogle() {
   const ok = await showConfirmDialog({ title: "Keluar dari Zigs.fi?", message: "Data lokal dan Spreadsheet tidak akan dihapus.", confirmText: "Ya, keluar", danger: false });
   if (!ok) return;
   googleAccessToken = "";
+  sessionStorage.removeItem(GOOGLE_SESSION_KEY);
   state.settings.googleSignedOut = true;
   addAudit("logout_google", "success");
   localStorage.setItem(DB_KEY, JSON.stringify(state));
@@ -773,8 +789,9 @@ async function connectGoogleStorage(createNew = false) {
   if (button) button.disabled = true;
   if (message) message.textContent = "Membuka login Google...";
   try {
-    const accessToken = await requestGoogleAccessToken("consent");
-    googleAccessToken = accessToken;
+    const tokenResult = await requestGoogleAccessToken("consent");
+    saveGoogleSessionToken(tokenResult.accessToken, tokenResult.expiresIn);
+    const accessToken = tokenResult.accessToken;
     let spreadsheetId = state.settings.googleSpreadsheetId;
     if (createNew || !spreadsheetId) {
       if (message) message.textContent = "Membuat Spreadsheet Zigs.fi...";

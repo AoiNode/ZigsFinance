@@ -74,7 +74,7 @@ export async function requestGoogleAccessToken(prompt = "consent") {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: GOOGLE_SCOPES,
-      callback: response => response.error ? reject(new Error(response.error_description || response.error)) : resolve(response.access_token),
+      callback: response => response.error ? reject(new Error(response.error_description || response.error)) : resolve({ accessToken: response.access_token, expiresIn: response.expires_in || 3600 }),
       error_callback: error => reject(new Error(error?.message || "Login Google dibatalkan"))
     });
     client.requestAccessToken({ prompt });
