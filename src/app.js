@@ -1,5 +1,4 @@
-﻿import { parseCsv } from "./utils.js";
-import { createFinanceSpreadsheet, requestGoogleAccessToken, syncStateToSpreadsheet } from "./googleSheets.js?v=3";
+﻿import { parseCsv, validateSheetUrl } from "./utils.js";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -43,29 +42,25 @@ const ICONS = {
 };
 
 const DB_KEY = "finance_os_v1";
-const GOOGLE_SESSION_KEY = "zigs_google_oauth_session";
 const SIDEBAR_KEY = "finance_os_sidebar_collapsed";
 const REQUIRED_TABS = ["accounts", "transactions", "budgets", "goals", "debts", "settings", "audit_log"];
 const state = loadState();
 let currentPage = "dashboard";
 let pageHistory = ["dashboard"];
 let editTxId = null;
-
+let syncVisualStatus = "idle";
+let syncVisualTimer = null;
 let isSidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
 const loadedPages = new Set();
 const loadingPages = new Set();
 const PAGE_SIZE = 10;
-const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, auditLog: 1 };
+const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1, auditLog: 1 };
 const dashboardHiddenSeries = new Set();
 let pendingDeletedTx = null;
 let pendingDeleteTimer = null;
 let quickTxType = "";
 let isBillFormOpen = false;
 let isSourceFormOpen = false;
-let googleAccessToken = loadGoogleSessionToken();
-let autoSyncTimer = null;
-let autoSyncInFlight = false;
-let autoSyncQueued = false;
 
 init();
 
@@ -78,23 +73,9 @@ function init() {
     applySidebarState();
     applySetupGateIfNeeded();
     render();
-    if (googleAccessToken && state.settings.hasPendingSync) scheduleAutoSync();
   } catch (err) {
     renderFatalError(err);
   }
-}
-
-function loadGoogleSessionToken() {
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(GOOGLE_SESSION_KEY) || "null");
-    if (!saved?.accessToken || Number(saved.expiresAt || 0) <= Date.now() + 60000) return "";
-    return saved.accessToken;
-  } catch { return ""; }
-}
-
-function saveGoogleSessionToken(accessToken, expiresIn = 3600) {
-  sessionStorage.setItem(GOOGLE_SESSION_KEY, JSON.stringify({ accessToken, expiresAt: Date.now() + Number(expiresIn || 3600) * 1000 }));
-  googleAccessToken = accessToken;
 }
 
 function defaultState() {
@@ -103,13 +84,9 @@ function defaultState() {
     accounts: [{ id: "main-wallet", name: "Dompet Utama", type: "cash", balance: 0, active: true }],
     categories: ["Makan", "Transport", "Tagihan", "Gaji", "Lainnya"],
     transactions: [], budgets: [], bills: [], goals: [], rules: [],
-    settings: { googleSpreadsheetId: "", googleSignedOut: false, storageMode: "google", hasPendingSync: false, lastSyncedAt: null },
+    settings: { sheetUrl: "", appsScriptUrl: "", lastSourceChangeAt: null, sourceHistory: [], hasPendingSync: false, lastSyncedAt: null },
     auditLog: []
   };
-}
-function extractSpreadsheetId(url) {
-  const match = String(url || "").match(/\/spreadsheets\/d\/([^/]+)/);
-  return match ? match[1] : "";
 }
 function loadState() {
   try {
@@ -130,14 +107,7 @@ function normalizeState(raw) {
     ...base,
     ...s,
     profile: { ...base.profile, ...(s.profile || {}) },
-    settings: {
-      ...base.settings,
-      googleSpreadsheetId: String(s.settings?.googleSpreadsheetId || extractSpreadsheetId(s.settings?.sheetUrl) || ""),
-      googleSignedOut: Boolean(s.settings?.googleSignedOut),
-      storageMode: "google",
-      hasPendingSync: Boolean(s.settings?.hasPendingSync),
-      lastSyncedAt: s.settings?.lastSyncedAt || null
-    },
+    settings: { ...base.settings, ...(s.settings || {}) },
     accounts: [mainAccount],
     categories: Array.isArray(s.categories) && s.categories.length > 0 ? s.categories : base.categories,
     transactions,
@@ -151,49 +121,7 @@ function normalizeState(raw) {
 function saveState(markDirty = true) {
   if (markDirty) state.settings.hasPendingSync = true;
   localStorage.setItem(DB_KEY, JSON.stringify(state));
-  updateSyncStatusUi();
-  if (markDirty && state.settings.storageMode === "google") scheduleAutoSync();
-}
-
-function scheduleAutoSync() {
-  if (autoSyncTimer) window.clearTimeout(autoSyncTimer);
-  autoSyncTimer = window.setTimeout(autoSyncToGoogle, 700);
-}
-
-async function autoSyncToGoogle() {
-  if (!googleAccessToken || !state.settings.googleSpreadsheetId || !state.settings.hasPendingSync) return;
-  if (autoSyncInFlight) { autoSyncQueued = true; return; }
-  autoSyncInFlight = true;
-  try {
-    await syncStateToSpreadsheet(googleAccessToken, state.settings.googleSpreadsheetId, state);
-    state.settings.lastSyncedAt = new Date().toISOString();
-    state.settings.hasPendingSync = false;
-    localStorage.setItem(DB_KEY, JSON.stringify(state));
-    updateSyncStatusUi();
-  } catch (error) {
-    console.warn("Sinkron otomatis tertunda:", error?.message || error);
-    state.settings.hasPendingSync = true;
-    localStorage.setItem(DB_KEY, JSON.stringify(state));
-    updateSyncStatusUi();
-  } finally {
-    autoSyncInFlight = false;
-    if (autoSyncQueued) {
-      autoSyncQueued = false;
-      scheduleAutoSync();
-    }
-  }
-}
-
-function updateSyncStatusUi() {
-  const badge = document.getElementById("syncStatusBadge");
-  const time = document.getElementById("syncLastTime");
-  const caption = document.getElementById("syncStatusCaption");
-  if (badge) {
-    badge.className = `bill-status ${state.settings.hasPendingSync ? "soon" : "paid"}`;
-    badge.textContent = state.settings.hasPendingSync ? "Menunggu" : "Tersinkron";
-  }
-  if (time) time.textContent = state.settings.lastSyncedAt ? new Date(state.settings.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
-  if (caption) caption.textContent = state.settings.hasPendingSync ? "Perubahan akan dikirim otomatis saat koneksi Google tersedia." : "Data lokal dan Google Spreadsheet sudah sama.";
+  renderSyncButtons();
 }
 function id() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -263,6 +191,9 @@ function renderBottomNav() {
 function bindGlobal() {
   const sidebarToggleBtn = document.getElementById("sidebarToggleBtn");
   if (sidebarToggleBtn) sidebarToggleBtn.onclick = () => toggleSidebar();
+  const syncTopBtn = document.getElementById("syncNowBtnTop");
+  if (syncTopBtn) syncTopBtn.onclick = syncToGoogleSheet;
+  renderSyncButtons();
   const bottom = document.getElementById("bottomNav");
   if (bottom) {
     bottom.onclick = (e) => {
@@ -490,7 +421,10 @@ function renderDashboard() {
   const recentTx = state.transactions.slice(0, 5);
   const recentRows = recentTx.map(t => `<button class="activity-row" type="button" data-go-page="transactions"><span class="activity-icon ${t.type}">${t.type === "income" ? icon("income") : icon("expense")}</span><span><strong>${escapeHtml(t.category)}</strong><small>${t.date}${t.note ? ` · ${escapeHtml(t.note)}` : ""}</small></span><b class="${t.type}">${t.type === "income" ? "+" : "−"}${fmt(t.amount)}</b></button>`).join("");
   const goalRows = state.goals.slice(0, 3).map(g => { const progress = g.target > 0 ? Math.min(100, (g.current / g.target) * 100) : 0; return `<div class="goal-mini"><div><strong>${escapeHtml(g.name)}</strong><small>${Math.round(progress)}% tercapai</small></div><span>${fmt(g.current)} / ${fmt(g.target)}</span><div class="progress"><span style="width:${progress}%"></span></div></div>`; }).join("");
-  setContent(`<section class="dashboard-hero"><div><span class="section-kicker">Saldo Dompet Utama</span><h2>${fmt(netWorth)}</h2><p>${savingRate >= 0 ? "Keuanganmu masih terkendali." : "Pengeluaran sedang lebih besar dari pemasukan."}</p></div></section><div class="metrics modern-metrics">${metric("Pemasukan bulan ini", fmt(monthlyIncome))}${metric("Pengeluaran bulan ini", fmt(monthlyExpense))}${metric("Rasio menabung", `${savingRate.toFixed(1)}%`)}${metric("Tagihan aktif", `${totalActiveBills}`)}</div><section class="dashboard-grid"><div class="card cashflow-card"><div class="card-title-row"><div><span class="section-kicker">Gambaran bulan ini</span><h3>Arus uang</h3></div><button class="text-btn" type="button" data-go-page="reports">Lihat laporan →</button></div><div class="mini-chart"><div class="donut" style="--p1:${p1}%;--p2:${p2}%"></div><div class="chart-legend">${chartRows}</div></div></div><div class="card bill-preview"><div class="card-title-row"><div><span class="section-kicker">Perlu perhatian</span><h3>Tagihan</h3></div><button class="text-btn" type="button" data-go-page="bills">Kelola →</button></div><div class="bill-highlight"><strong>${dueCount ? `${dueCount} segera jatuh tempo` : "Semua aman"}</strong><span>${dueCount ? fmt(dueBillsAmount) : "Tidak ada tagihan dalam 3 hari"}</span></div><p>${activeBillText}</p></div></section><section class="dashboard-grid lower"><div class="card"><div class="card-title-row"><div><span class="section-kicker">Terbaru</span><h3>Aktivitas</h3></div><button class="text-btn" type="button" data-go-page="transactions">Semua →</button></div><div class="activity-list">${recentRows || emptyState("Belum ada transaksi", "Catat pemasukan atau pengeluaran pertamamu.")}</div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">Progres</span><h3>Target keuangan</h3></div><button class="text-btn" type="button" data-go-page="goals">Kelola →</button></div>${goalRows || emptyState("Belum ada target", "Buat target agar tabungan lebih terarah.")}</div></section><div class="fab-wrap"><button class="fab" id="quickFab" type="button" aria-label="Aksi cepat">${icon("plus")}</button><div class="fab-menu"><button data-quick-type="income" title="Tambah pemasukan" aria-label="Tambah pemasukan">${icon("income")}</button><button data-quick-type="expense" title="Tambah pengeluaran" aria-label="Tambah pengeluaran">${icon("expense")}</button></div></div>`);
+  setContent(`<section class="dashboard-hero"><div><span class="section-kicker">Saldo Dompet Utama</span><h2>${fmt(netWorth)}</h2><p>${savingRate >= 0 ? "Keuanganmu masih terkendali." : "Pengeluaran sedang lebih besar dari pemasukan."}</p></div></section><div class="metrics modern-metrics">${metric("Pemasukan bulan ini", fmt(monthlyIncome))}${metric("Pengeluaran bulan ini", fmt(monthlyExpense))}${metric("Rasio menabung", `${savingRate.toFixed(1)}%`)}${metric("Tagihan aktif", `${totalActiveBills}`)}</div><section class="dashboard-grid"><div class="card cashflow-card"><div class="card-title-row"><div><span class="section-kicker">Gambaran bulan ini</span><h3>Arus uang</h3></div><button class="text-btn" type="button" data-go-page="reports">Lihat laporan →</button></div><div class="mini-chart"><div class="donut" style="--p1:${p1}%;--p2:${p2}%"></div><div class="chart-legend">${chartRows}</div></div></div><div class="card bill-preview"><div class="card-title-row"><div><span class="section-kicker">Perlu perhatian</span><h3>Tagihan</h3></div><button class="text-btn" type="button" data-go-page="bills">Kelola →</button></div><div class="bill-highlight"><strong>${dueCount ? `${dueCount} segera jatuh tempo` : "Semua aman"}</strong><span>${dueCount ? fmt(dueBillsAmount) : "Tidak ada tagihan dalam 3 hari"}</span></div><p>${activeBillText}</p></div></section><section class="dashboard-grid lower"><div class="card"><div class="card-title-row"><div><span class="section-kicker">Terbaru</span><h3>Aktivitas</h3></div><button class="text-btn" type="button" data-go-page="transactions">Semua →</button></div><div class="activity-list">${recentRows || emptyState("Belum ada transaksi", "Catat pemasukan atau pengeluaran pertamamu.")}</div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">Progres</span><h3>Target keuangan</h3></div><button class="text-btn" type="button" data-go-page="goals">Kelola →</button></div>${goalRows || emptyState("Belum ada target", "Buat target agar tabungan lebih terarah.")}</div></section><div class="fab-wrap"><button id="syncNowBtnFab" class="sync-fab-btn sync-top-btn sync-btn" type="button" aria-label="Sinkron Google Sheet"></button><button class="fab" id="quickFab" type="button" aria-label="Aksi cepat">${icon("plus")}</button><div class="fab-menu"><button data-quick-type="income" title="Tambah pemasukan" aria-label="Tambah pemasukan">${icon("income")}</button><button data-quick-type="expense" title="Tambah pengeluaran" aria-label="Tambah pengeluaran">${icon("expense")}</button></div></div>`);
+  const syncFab = document.getElementById("syncNowBtnFab");
+  if (syncFab) syncFab.onclick = syncToGoogleSheet;
+  renderSyncButtons();
   const fab = document.getElementById("quickFab");
   if (fab) fab.onclick = () => document.querySelector(".fab-wrap")?.classList.toggle("open");
 }
@@ -753,71 +687,134 @@ function renderReports() {
 
 function renderSettings() {
   const s = state.settings;
+  const historyPage = paginate(s.sourceHistory, "sourceHistory");
   const auditPage = paginate(state.auditLog, "auditLog");
   const lastSyncedLabel = s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
-  const auditRows = state.auditLog.length ? auditPage.items.map(l => `<div class="audit-row"><span class="audit-dot"></span><div><strong>${escapeHtml(l.action)}</strong><small>${new Date(l.at).toLocaleString("id-ID")}</small><p>${escapeHtml(l.detail || "Tanpa detail")}</p></div></div>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.");
-  setContent(`<div class="settings-layout"><section class="settings-account-card card"><div class="settings-account-icon"><span class="google-g">G</span></div><div class="settings-account-copy"><span class="section-kicker">Akun Google</span><h3>Terhubung ke Google</h3><p>Data keuangan tersimpan otomatis di Spreadsheet pribadi milikmu.</p></div><button id="logoutGoogleBtn" class="btn logout-btn" type="button">Keluar</button></section><section class="card settings-sync-card"><div class="card-title-row"><div><span class="section-kicker">Penyimpanan</span><h3>Status sinkron</h3></div><span id="syncStatusBadge" class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Menunggu" : "Tersinkron"}</span></div><div class="sync-info-row"><span>Sinkron terakhir</span><strong id="syncLastTime">${lastSyncedLabel}</strong></div><p id="syncStatusCaption" class="sync-caption">${s.hasPendingSync ? "Perubahan akan dikirim otomatis saat koneksi Google tersedia." : "Data lokal dan Google Spreadsheet sudah sama."}</p></section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Keamanan</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${state.auditLog.length} aktivitas</span></div><div class="audit-list">${auditRows}</div>${auditPage.controls}</section></div>`);
-  document.getElementById("logoutGoogleBtn").onclick = logoutGoogle;
+  const sourceForm = isSourceFormOpen ? `<form id="sourceForm" class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div class="source-form-actions"><button class="btn">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form>` : "";
+  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Penyimpanan</span><h3>Sumber data</h3><p>Google Sheet dan Apps Script sudah terhubung. Detail link disembunyikan agar halaman tetap rapi.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber data"}</button></section>${sourceForm}<div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Riwayat pergantian link</h3>${historyPage.items.map(h => `<p>${h.at}: sumber diperbarui (${escapeHtml(h.reason || "tanpa alasan")})</p>`).join("") || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}${historyPage.controls}</div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? auditPage.items.map(l => `<p>${l.at} - ${l.action} - ${escapeHtml(l.detail || "")}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}${auditPage.controls}</div>`);
+  const form = document.getElementById("sourceForm");
+  if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const res = await saveDataSourceFromForm(f);
+    showToast(res.ok ? "Sumber tersimpan dan koneksi berhasil" : `Gagal: ${res.message}`);
+    if (res.ok) { isSourceFormOpen = false; render(); }
+  };
 }
 
 function applySetupGateIfNeeded() {
-  const needsSetup = state.settings.googleSignedOut || !state.settings.googleSpreadsheetId;
+  const needsSetup = !state.settings.sheetUrl || !state.settings.appsScriptUrl;
   const gate = document.getElementById("setupGate");
   if (!needsSetup) {
     gate.classList.add("hidden");
     return;
   }
   gate.classList.remove("hidden");
-  gate.innerHTML = `<section class="setup-card google-setup login-gate"><img class="login-logo" src="./icons/icon-192.png?v=2" alt="Logo Zigs.fi"><h2>Masuk ke Zigs.fi</h2><p>Catat keuangan dan simpan otomatis ke Google Sheets milikmu.</p><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> Lanjutkan dengan Google</button><small id="setupState" class="setup-status">Data tetap tersimpan di akun Google milikmu.</small></section>`;
-  document.getElementById("connectGoogleBtn").onclick = () => connectGoogleStorage(!state.settings.googleSpreadsheetId);
-}
-
-async function logoutGoogle() {
-  const ok = await showConfirmDialog({ title: "Keluar dari Zigs.fi?", message: "Data lokal dan Spreadsheet tidak akan dihapus.", confirmText: "Ya, keluar", danger: false });
-  if (!ok) return;
-  googleAccessToken = "";
-  sessionStorage.removeItem(GOOGLE_SESSION_KEY);
-  state.settings.googleSignedOut = true;
-  addAudit("logout_google", "success");
-  localStorage.setItem(DB_KEY, JSON.stringify(state));
-  applySetupGateIfNeeded();
-}
-
-async function connectGoogleStorage(createNew = false) {
-  const message = document.getElementById("setupState");
-  const button = document.getElementById("connectGoogleBtn");
-  if (button) button.disabled = true;
-  if (message) message.textContent = "Membuka login Google...";
-  try {
-    const tokenResult = await requestGoogleAccessToken("consent");
-    saveGoogleSessionToken(tokenResult.accessToken, tokenResult.expiresIn);
-    const accessToken = tokenResult.accessToken;
-    let spreadsheetId = state.settings.googleSpreadsheetId;
-    if (createNew || !spreadsheetId) {
-      if (message) message.textContent = "Membuat Spreadsheet Zigs.fi...";
-      const spreadsheet = await createFinanceSpreadsheet(accessToken);
-      spreadsheetId = spreadsheet.spreadsheetId;
+  gate.innerHTML = `<form id="firstSetupForm" class="setup-card"><div class="setup-heading"><div><span class="eyebrow">Satu kali setup</span><h2>Hubungkan penyimpananmu</h2></div><a class="tutorial-link" href="./tutorial.html" target="_blank" rel="noopener">Buka tutorial <span aria-hidden="true">↗</span></a></div><p>Masukkan link Google Sheet dan URL Web App Apps Script. Data tetap milikmu dan tersimpan di spreadsheet pribadi.</p><label>Link Google Sheet<input name="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" placeholder="https://script.google.com/macros/s/.../exec" required></label><div class="setup-actions"><button id="testSetupBtn" class="btn ghost" type="button">Uji Koneksi</button><button id="saveSetupBtn" class="btn" type="submit">Simpan & Lanjut</button></div><small id="setupState" class="setup-status">Belum ada koneksi.</small></form>`;
+  document.getElementById("testSetupBtn").onclick = async () => {
+    const form = document.getElementById("firstSetupForm");
+    const fd = new FormData(form);
+    const message = document.getElementById("setupState");
+    message.textContent = "Menguji koneksi...";
+    const test = await validateSetupValues(fd);
+    message.textContent = test.ok ? "Koneksi valid." : test.message;
+  };
+  document.getElementById("firstSetupForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const result = await saveDataSourceFromForm(fd);
+    const message = document.getElementById("setupState");
+    if (!result.ok) {
+      message.textContent = result.message;
+      return;
     }
-    state.settings.storageMode = "google";
-    state.settings.googleSignedOut = false;
-    state.settings.googleSpreadsheetId = spreadsheetId;
-    addAudit("connect_google_sheets", spreadsheetId);
-    if (message) message.textContent = "Mengirim data awal...";
-    await syncStateToSpreadsheet(accessToken, spreadsheetId, state);
+    message.textContent = "Sukses. Memuat halaman utama...";
+    gate.classList.add("hidden");
+    render();
+  };
+}
+
+async function validateSetupValues(formData) {
+  const sheetUrl = String(formData.get("sheetUrl") || "").trim();
+  const appsScriptUrl = String(formData.get("appsScriptUrl") || "").trim();
+  if (!validateSheetUrl(sheetUrl)) return { ok: false, message: "Link Google Sheet tidak valid." };
+  if (!appsScriptUrl.startsWith("https://script.google.com/")) return { ok: false, message: "URL Apps Script tidak valid." };
+  try {
+    const ping = await fetch(`${appsScriptUrl}?action=ping`);
+    const data = await ping.json().catch(() => ({}));
+    if (!ping.ok || data.ok === false) return { ok: false, message: data.message || "Ping ke Apps Script gagal." };
+  } catch {
+    return { ok: false, message: "Tidak bisa terhubung ke Apps Script." };
+  }
+  return { ok: true };
+}
+
+async function saveDataSourceFromForm(formData) {
+  const validation = await validateSetupValues(formData);
+  if (!validation.ok) return validation;
+  const next = String(formData.get("sheetUrl") || "").trim();
+  const appsScriptUrl = String(formData.get("appsScriptUrl") || "").trim();
+  const reason = String(formData.get("reason") || "").trim();
+  const old = state.settings.sheetUrl;
+  if (old && old !== next) {
+    download(`backup-before-source-change-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state, null, 2), "application/json");
+    state.settings.sourceHistory.unshift({ at: new Date().toISOString(), old, new: next, reason });
+    addAudit("change_sheet_source", `${old} -> ${next}`);
+  }
+  state.settings.sheetUrl = next;
+  state.settings.appsScriptUrl = appsScriptUrl;
+  state.settings.lastSourceChangeAt = new Date().toISOString();
+  saveState();
+  return { ok: true };
+}
+
+
+async function syncToGoogleSheet() {
+  const { appsScriptUrl, sheetUrl } = state.settings;
+  if (!sheetUrl || !appsScriptUrl) {
+    applySetupGateIfNeeded();
+    setSyncVisual("error");
+    showToast("Isi sumber data dulu sebelum sinkron.");
+    return;
+  }
+  setSyncVisual("loading");
+  try {
+    const params = new URLSearchParams();
+    params.set("payload", JSON.stringify({ action: "sync", sheetUrl, payload: state }));
+    const r = await fetch(appsScriptUrl, { method: "POST", body: params });
+    const text = await r.text();
+    let data = {};
+    try { data = JSON.parse(text); } catch {}
+    if (!r.ok || data.ok === false) {
+      const msg = `Sinkron gagal${data.message ? `: ${data.message}` : ""}`;
+      setSyncVisual("error");
+      showToast(msg);
+      return;
+    }
+    setSyncVisual("success");
+    showToast("Sinkron Google Sheet berhasil");
+    addAudit("sync_google_sheet", "success");
     state.settings.lastSyncedAt = new Date().toISOString();
     state.settings.hasPendingSync = false;
     saveState(false);
-    document.getElementById("setupGate")?.classList.add("hidden");
-    showToast("Google Spreadsheet berhasil dibuat dan terhubung");
-    render();
-  } catch (error) {
-    if (message) message.textContent = error.message || "Gagal menghubungkan Google";
-    showToast(error.message || "Gagal menghubungkan Google");
-  } finally {
-    if (button) button.disabled = false;
+  } catch (err) {
+    const msg = `Sinkron gagal: ${err?.message || "kesalahan jaringan"}`;
+    setSyncVisual("error");
+    showToast(msg);
   }
 }
 
+function renderSyncButtons() {
+  const buttons = [document.getElementById("syncNowBtnTop"), document.getElementById("syncNowBtnFab")];
+  const iconName = syncVisualStatus === "loading" ? "spinner" : (syncVisualStatus === "success" ? "check" : (syncVisualStatus === "error" ? "x" : "sync"));
+  const showWarningBadge = !!state.settings.hasPendingSync;
+  buttons.forEach((btn) => {
+    if (!btn) return;
+    btn.className = `${btn.id === "syncNowBtnFab" ? "sync-fab-btn " : ""}sync-top-btn sync-btn sync-${syncVisualStatus}`;
+    btn.innerHTML = `<span class="sync-icon">${icon(iconName)}</span>${showWarningBadge ? '<span class="sync-badge" aria-hidden="true">!</span>' : ""}`;
+  });
+}
 
 function renderPageLoading() {
   setContent(`<div class="card"><div class="skeleton-line w-40"></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line w-70"></div></div>`);
@@ -828,6 +825,17 @@ function renderPageError(err) {
   setContent(`<div class="card"><h3>Terjadi galat halaman</h3><p>${escapeHtml(message)}</p><button class="btn" type="button" data-retry-render="1">Coba lagi</button></div>`);
 }
 
+function setSyncVisual(status) {
+  syncVisualStatus = status;
+  renderSyncButtons();
+  if (syncVisualTimer) window.clearTimeout(syncVisualTimer);
+  if (status === "success" || status === "error") {
+    syncVisualTimer = window.setTimeout(() => {
+      syncVisualStatus = "idle";
+      renderSyncButtons();
+    }, 2200);
+  }
+}
 
 function upsertById(kind, payload, action, detail) {
   const list = state[kind];

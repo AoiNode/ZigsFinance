@@ -8,14 +8,16 @@ await mkdir(dist, { recursive: true });
 
 for (const file of [
   "index.html",
+  "tutorial.html",
   "manifest.webmanifest",
   "sw.js",
-  "README.md"
+  "README.md",
+  "google-apps-script.txt"
 ]) {
   await copyFile(new URL(file, root), new URL(file, dist));
 }
 
-for (const dir of ["src", "icons"]) {
+for (const dir of ["src", "icons", "apps-script"]) {
   await cp(new URL(`${dir}/`, root), new URL(`${dir}/`, dist), { recursive: true });
 }
 
