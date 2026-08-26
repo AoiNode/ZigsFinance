@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { GOOGLE_CLIENT_ID, GOOGLE_SCOPES, SHEET_TABS, sheetUrl, stateToSheetValues } from "../src/googleSheets.js";
 
-test("Google OAuth uses configured public client id and minimum file scopes", () => {
+test("Google OAuth uses configured public client id and minimum file scopes", async () => {
   assert.equal(GOOGLE_CLIENT_ID, "1080886660072-p6m6obifssalemf9ruefv2egid0fqlsd.apps.googleusercontent.com");
   assert.match(GOOGLE_SCOPES, /drive\.file/);
   assert.match(GOOGLE_SCOPES, /spreadsheets/);
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/googleSheets.js", import.meta.url), "utf8"));
+  assert.match(source, /locale: "id"/);
+  assert.doesNotMatch(source, /id_ID/);
   assert.doesNotMatch(GOOGLE_SCOPES, /auth\/drive(?:\s|$)/);
 });
 

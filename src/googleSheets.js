@@ -33,7 +33,7 @@ export async function createFinanceSpreadsheet(accessToken) {
   return googleApi("spreadsheets", accessToken, {
     method: "POST",
     body: JSON.stringify({
-      properties: { title: "Zigs.fi — Data Keuangan", locale: "id_ID", timeZone: "Asia/Jakarta" },
+      properties: { title: "Zigs.fi — Data Keuangan", locale: "id", timeZone: "Asia/Jakarta" },
       sheets: SHEET_TABS.map(title => ({ properties: { title } }))
     })
   });

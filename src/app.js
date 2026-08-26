@@ -705,7 +705,7 @@ function applySetupGateIfNeeded() {
     return;
   }
   gate.classList.remove("hidden");
-  gate.innerHTML = `<section class="setup-card google-setup login-gate"><img class="login-logo" src="./icons/icon-192.png?v=2" alt="Logo Zigs.fi"><span class="eyebrow">Keuangan pribadi, lebih rapi</span><h2>Masuk ke Zigs.fi</h2><p>Gunakan akun Google untuk mulai. Spreadsheet pribadi akan dibuat otomatis di Google Drive milikmu.</p><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> Lanjutkan dengan Google</button><div class="login-trust"><span>✓ Tanpa setup manual</span><span>✓ Data milikmu</span><span>✓ Sinkron ke Google Sheets</span></div><small id="setupState" class="setup-status">Zigs.fi hanya dapat mengakses Spreadsheet yang dibuat oleh aplikasi.</small></section>`;
+  gate.innerHTML = `<section class="setup-card google-setup login-gate"><img class="login-logo" src="./icons/icon-192.png?v=2" alt="Logo Zigs.fi"><h2>Masuk ke Zigs.fi</h2><p>Catat keuangan dan simpan otomatis ke Google Sheets milikmu.</p><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> Lanjutkan dengan Google</button><small id="setupState" class="setup-status">Data tetap tersimpan di akun Google milikmu.</small></section>`;
   document.getElementById("connectGoogleBtn").onclick = () => connectGoogleStorage(true);
 }
 
