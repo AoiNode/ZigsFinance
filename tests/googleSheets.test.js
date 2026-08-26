@@ -7,7 +7,7 @@ test("Google OAuth uses configured public client id and minimum file scopes", as
   assert.match(GOOGLE_SCOPES, /drive\.file/);
   assert.match(GOOGLE_SCOPES, /spreadsheets/);
   const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("../src/googleSheets.js", import.meta.url), "utf8"));
-  assert.match(source, /locale: "id"/);
+  assert.doesNotMatch(source, /locale\s*:/);
   assert.doesNotMatch(source, /id_ID/);
   assert.doesNotMatch(GOOGLE_SCOPES, /auth\/drive(?:\s|$)/);
 });

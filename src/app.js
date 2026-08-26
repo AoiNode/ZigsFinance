@@ -1,5 +1,5 @@
 ﻿import { validateSheetUrl, parseCsv } from "./utils.js";
-import { createFinanceSpreadsheet, requestGoogleAccessToken, sheetUrl as googleSheetUrl, syncStateToSpreadsheet } from "./googleSheets.js";
+import { createFinanceSpreadsheet, requestGoogleAccessToken, sheetUrl as googleSheetUrl, syncStateToSpreadsheet } from "./googleSheets.js?v=2";
 
 const NAV = [
   ["dashboard", "Beranda"],
