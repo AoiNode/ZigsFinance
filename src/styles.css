@@ -39,3 +39,70 @@ main{max-width:1560px;width:100%;margin:0 auto;padding-top:34px}header{min-heigh
 @media(max-width:980px){.settings-premium{grid-template-columns:1fr}.settings-source-card{grid-column:auto}.settings-history-card,.settings-audit-card{width:100%;max-width:100%;min-width:0}}
 @media(max-width:560px){body{background:linear-gradient(180deg,#eef2ec 0,#f6f7f3 180px)}main{padding:15px 11px calc(150px + env(safe-area-inset-bottom))}header{min-height:44px;margin-bottom:14px;padding:0 4px 10px}header h2{font-size:27px;letter-spacing:-1.1px}.grid{gap:12px}.card{border-radius:20px;padding:17px;box-shadow:0 8px 28px rgba(18,50,39,.055)}.dashboard-hero{border-radius:22px;padding:24px 19px}.dashboard-hero h2{font-size:36px;letter-spacing:-1.8px}.modern-metrics{gap:9px}.modern-metrics .metric{min-height:105px;border-radius:18px;padding:14px}.modern-metrics .metric small{font-size:10px}.modern-metrics .metric h3{font-size:18px;letter-spacing:-.6px}.dashboard-grid{gap:11px}.cashflow-card,.bill-preview{padding:17px}.card-title-row{margin-bottom:14px}.activity-row{padding:12px 0}.transaction-layout{gap:11px}.tx-entry-card,.import-card,.tx-history-card{border-radius:20px}.type-switch{background:#e8ede8}.type-switch input:checked+span{box-shadow:0 3px 12px rgba(18,61,49,.1)}.file-drop{background:#f6f8f4}.bill-summary{border-radius:22px}.bill-item{border-radius:17px;box-shadow:0 4px 16px rgba(18,50,39,.035)}.bottom-nav{border-radius:22px 22px 0 0;background:linear-gradient(180deg,#123f32,#0c3026);box-shadow:0 -12px 34px rgba(12,47,37,.24)}.bottom-nav button.active{background:rgba(185,243,106,.1)}.fab{box-shadow:0 14px 34px rgba(18,61,49,.3)}.settings-premium{gap:11px}.settings-source-card{grid-template-columns:42px minmax(0,1fr);gap:12px}.settings-source-icon{width:40px;height:40px;border-radius:12px}.settings-source-copy h3{font-size:17px}.settings-source-copy p{font-size:11px;line-height:1.45}.settings-source-card .edit-source-btn{grid-column:1/-1;width:100%;justify-content:center;min-height:44px}.settings-status-card,.settings-history-card,.settings-audit-card{padding:17px}.settings-premium .card-title-row{align-items:center}.settings-premium .count-chip{max-width:82px;overflow:hidden;text-overflow:ellipsis}.setting-log-row{grid-template-columns:30px minmax(0,1fr);padding:12px 0}.setting-log-icon{width:29px;height:29px}.setting-log-dot{margin-left:9px}.settings-premium .pagination{margin-top:12px;gap:5px}.settings-premium .pagination .btn{font-size:10px;padding:9px 8px}.settings-premium .pagination span{max-width:86px;overflow:hidden;text-overflow:ellipsis}.source-form{padding:17px}.source-form-actions{display:grid;grid-template-columns:1fr}.source-form-actions .btn{width:100%}}
 @media(max-width:380px){main{padding-inline:8px}.settings-source-card{grid-template-columns:1fr}.settings-source-icon{display:none}.settings-premium .card-title-row{align-items:flex-start}.settings-premium .count-chip{font-size:9px}.settings-status-time strong{font-size:12px}.setting-log-row{grid-template-columns:22px minmax(0,1fr)}.setting-log-icon{width:22px;height:22px}.setting-log-icon svg{width:12px}.setting-log-dot{margin-left:6px}.modern-metrics{grid-template-columns:1fr}.modern-metrics .metric{min-height:96px}}
+
+
+/* Native Android-like mobile shell */
+@media(max-width:980px){
+ html,body{min-height:100%;background:#f7f8f5;overscroll-behavior-y:none}
+ body{font-family:'DM Sans',system-ui,-apple-system,'Segoe UI',sans-serif;-webkit-tap-highlight-color:transparent}
+ .app-shell{min-height:100dvh;background:#f7f8f5}
+ main{padding:0 14px calc(116px + env(safe-area-inset-bottom));background:#f7f8f5}
+ header{position:sticky;top:0;z-index:24;height:64px;min-height:64px;margin:0 -14px 14px;padding:0 18px;display:flex;align-items:center;border:0;background:rgba(247,248,245,.94);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+ header:after{content:'';position:absolute;left:18px;right:18px;bottom:0;height:1px;background:rgba(20,54,42,.07)}
+ header h2{font:700 24px/1 Manrope,sans-serif;letter-spacing:-.8px}
+ #alerts:not(:empty){margin-top:2px}
+ .grid{gap:12px}
+ .card,.metric{border:0;border-radius:20px;background:#fff;box-shadow:0 1px 2px rgba(20,44,34,.05),0 7px 24px rgba(20,44,34,.045)}
+ .card{padding:18px}.card:hover{transform:none}
+ .dashboard-hero,.bill-summary{border-radius:24px;box-shadow:0 12px 32px rgba(18,61,49,.17)}
+ .modern-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .modern-metrics .metric{min-height:108px;padding:16px}
+ .modern-metrics .metric h3{font-size:20px}
+ .text-btn{min-height:38px;padding:8px 2px}
+ input,select,textarea{min-height:50px;border:0;border-radius:15px;background:#f0f3ef;box-shadow:inset 0 0 0 1px rgba(18,61,49,.06)}
+ input:focus,select:focus,textarea:focus{background:#fff;box-shadow:inset 0 0 0 2px #286450,0 0 0 3px rgba(40,100,80,.1)}
+ .btn{min-height:48px;border-radius:14px;font-weight:700;box-shadow:none}
+ .btn:active,button:active{transform:scale(.97)}
+ .btn.ghost{background:#edf1ed}
+ .type-switch{padding:4px;border-radius:16px;background:#e9ede9}
+ .type-switch span{min-height:43px;align-items:center;border-radius:13px}
+ .type-switch input:checked+span{box-shadow:0 2px 8px rgba(18,61,49,.09)}
+ .amount-field>div,.rupiah-control{min-height:56px;border:0;border-radius:16px;background:#f0f3ef;box-shadow:inset 0 0 0 1px rgba(18,61,49,.06)}
+ .file-drop{border-radius:20px;background:#f3f6f2;border-color:#aab9af}
+ .bill-item{border:0;border-radius:18px;background:#f8faf7;box-shadow:inset 0 0 0 1px rgba(18,61,49,.065)}
+ .bill-item:hover{transform:none;box-shadow:inset 0 0 0 1px rgba(18,61,49,.065)}
+ .icon-btn,td button{min-width:40px;width:40px;height:40px;border-radius:13px}
+ .table-wrap{border:0;border-radius:17px;background:#fff}
+ th{position:sticky;top:0;background:#f2f5f1}
+ .pagination{padding-top:12px}.pagination .btn{min-height:42px;border-radius:13px}
+ .empty-state{border:0;background:#f2f5f1;border-radius:18px}
+ .fab-wrap{right:18px;bottom:calc(82px + env(safe-area-inset-bottom))}
+ .fab{width:60px;height:60px;border-radius:19px;background:var(--lime);box-shadow:0 12px 28px rgba(18,61,49,.27)}
+ .fab-menu button{border:0;border-radius:16px;box-shadow:0 8px 24px rgba(18,61,49,.16)}
+ .bottom-nav{height:72px;left:0;right:0;bottom:0;padding:7px 5px calc(7px + env(safe-area-inset-bottom));grid-template-columns:repeat(7,minmax(0,1fr));border:0;border-radius:0;background:#fff;box-shadow:0 -1px 0 rgba(18,61,49,.08),0 -8px 24px rgba(18,61,49,.07)}
+ .bottom-nav:before{display:none}
+ .bottom-nav button{height:52px;border-radius:16px;color:#718079}
+ .bottom-nav button.active{background:transparent;color:#123d31}
+ .bottom-nav button.active:after{bottom:0;width:18px;height:3px;border-radius:3px;background:#174c3c;box-shadow:none}
+ .bottom-nav .nav-icon{width:42px;height:38px;border-radius:14px}
+ .bottom-nav button.active .nav-icon{background:#dff3c8;color:#123d31;box-shadow:none}
+ .toast-host{bottom:calc(82px + env(safe-area-inset-bottom))}
+ .toast{border-radius:15px;box-shadow:0 10px 30px rgba(10,35,25,.22)}
+ .modal-backdrop,.confirm-backdrop,.setup-gate{align-items:end;padding:0;background:rgba(7,24,18,.48);backdrop-filter:blur(3px)}
+ .modal-card,.confirm-card,.setup-card{width:100%;max-width:none;max-height:90dvh;border:0;border-radius:26px 26px 0 0;padding:22px 20px calc(24px + env(safe-area-inset-bottom));animation:android-sheet-in .28s cubic-bezier(.2,.8,.2,1)}
+ .modal-card:before,.confirm-card:before,.setup-card:before{content:'';display:block;width:36px;height:4px;margin:-10px auto 18px;border-radius:5px;background:#c8cfca}
+ .settings-premium{gap:12px}.settings-premium .card{box-shadow:0 1px 2px rgba(20,44,34,.04)}
+}
+@media(max-width:430px){
+ main{padding-inline:10px}
+ header{margin-inline:-10px;padding-inline:16px}
+ header:after{left:16px;right:16px}
+ .card{padding:16px;border-radius:18px}
+ .modern-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .modern-metrics .metric{min-height:100px;padding:14px;border-radius:18px}
+ .modern-metrics .metric h3{font-size:17px;overflow-wrap:anywhere}
+ .dashboard-hero{padding:22px 18px}.dashboard-hero h2{font-size:34px}
+ .bottom-nav{padding-inline:2px}.bottom-nav .nav-icon{width:36px;height:36px}.bottom-nav .nav-icon svg{width:17px;height:17px}
+ .settings-source-card{padding:16px}.settings-source-copy p{font-size:11px}
+}
+@keyframes android-sheet-in{from{opacity:.6;transform:translateY(32px)}to{opacity:1;transform:none}}
