@@ -87,7 +87,7 @@ function defaultState() {
     accounts: [{ id: "main-wallet", name: "Dompet Utama", type: "cash", balance: 0, active: true }],
     categories: ["Makan", "Transport", "Tagihan", "Gaji", "Lainnya"],
     transactions: [], budgets: [], bills: [], goals: [], rules: [],
-    settings: { sheetUrl: "", appsScriptUrl: "", googleSpreadsheetId: "", storageMode: "", lastSourceChangeAt: null, sourceHistory: [], hasPendingSync: false, lastSyncedAt: null },
+    settings: { sheetUrl: "", appsScriptUrl: "", googleSpreadsheetId: "", googleSignedOut: false, storageMode: "", lastSourceChangeAt: null, sourceHistory: [], hasPendingSync: false, lastSyncedAt: null },
     auditLog: []
   };
 }
@@ -701,17 +701,14 @@ function renderReports() {
 
 function renderSettings() {
   const s = state.settings;
-  const historyPage = paginate(s.sourceHistory, "sourceHistory");
   const auditPage = paginate(state.auditLog, "auditLog");
   const lastSyncedLabel = s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
-  const sourceForm = isSourceFormOpen ? `<div class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Google Drive</span><h3>Kelola koneksi</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><p>Hubungkan ulang akun Google jika izin sudah kedaluwarsa. Spreadsheet yang sama tetap digunakan.</p><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> Hubungkan ulang Google</button></div>` : "";
-  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Penyimpanan</span><h3>Sumber data</h3><p>${s.storageMode === "google" ? "Terhubung otomatis ke Google Spreadsheet pribadi." : "Google Sheet dan Apps Script terhubung secara manual."} Detail link disembunyikan agar halaman tetap rapi.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber data"}</button></section>${sourceForm}<div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Riwayat pergantian link</h3>${historyPage.items.map(h => `<p>${h.at}: sumber diperbarui (${escapeHtml(h.reason || "tanpa alasan")})</p>`).join("") || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}${historyPage.controls}</div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? auditPage.items.map(l => `<p>${l.at} - ${l.action} - ${escapeHtml(l.detail || "")}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}${auditPage.controls}</div>`);
-  const googleButton = document.getElementById("connectGoogleBtn");
-  if (googleButton) googleButton.onclick = () => connectGoogleStorage(false);
+  setContent(`<section class="settings-source-card card"><div><span class="section-kicker">Akun Google</span><h3>Keluar dari Zigs.fi</h3><p>Data lokal dan Spreadsheet tetap aman. Kamu bisa masuk kembali dengan akun Google yang sama.</p></div><button id="logoutGoogleBtn" class="btn logout-btn" type="button">Keluar</button></section><div class="card"><div class="card-title-row"><div><span class="section-kicker">Status</span><h3>Info sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><p>Sinkron terakhir: ${lastSyncedLabel}</p><p>${s.hasPendingSync ? "Ada perubahan data yang belum dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah sinkron."}</p></div><div class="card"><h3>Jejak aktivitas</h3>${state.auditLog.length ? auditPage.items.map(l => `<p>${l.at} - ${l.action} - ${escapeHtml(l.detail || "")}</p>`).join("") : emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}${auditPage.controls}</div>`);
+  document.getElementById("logoutGoogleBtn").onclick = logoutGoogle;
 }
 
 function applySetupGateIfNeeded() {
-  const needsSetup = !state.settings.googleSpreadsheetId;
+  const needsSetup = state.settings.googleSignedOut || !state.settings.googleSpreadsheetId;
   const gate = document.getElementById("setupGate");
   if (!needsSetup) {
     gate.classList.add("hidden");
@@ -719,7 +716,17 @@ function applySetupGateIfNeeded() {
   }
   gate.classList.remove("hidden");
   gate.innerHTML = `<section class="setup-card google-setup login-gate"><img class="login-logo" src="./icons/icon-192.png?v=2" alt="Logo Zigs.fi"><h2>Masuk ke Zigs.fi</h2><p>Catat keuangan dan simpan otomatis ke Google Sheets milikmu.</p><button id="connectGoogleBtn" class="btn google-connect" type="button"><span class="google-g">G</span> Lanjutkan dengan Google</button><small id="setupState" class="setup-status">Data tetap tersimpan di akun Google milikmu.</small></section>`;
-  document.getElementById("connectGoogleBtn").onclick = () => connectGoogleStorage(true);
+  document.getElementById("connectGoogleBtn").onclick = () => connectGoogleStorage(!state.settings.googleSpreadsheetId);
+}
+
+async function logoutGoogle() {
+  const ok = await showConfirmDialog({ title: "Keluar dari Zigs.fi?", message: "Data lokal dan Spreadsheet tidak akan dihapus.", confirmText: "Ya, keluar", danger: false });
+  if (!ok) return;
+  googleAccessToken = "";
+  state.settings.googleSignedOut = true;
+  addAudit("logout_google", "success");
+  localStorage.setItem(DB_KEY, JSON.stringify(state));
+  applySetupGateIfNeeded();
 }
 
 async function validateSetupValues(formData) {
@@ -774,6 +781,7 @@ async function connectGoogleStorage(createNew = false) {
       spreadsheetId = spreadsheet.spreadsheetId;
     }
     state.settings.storageMode = "google";
+    state.settings.googleSignedOut = false;
     state.settings.googleSpreadsheetId = spreadsheetId;
     state.settings.sheetUrl = googleSheetUrl(spreadsheetId);
     state.settings.appsScriptUrl = "";
