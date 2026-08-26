@@ -106,3 +106,41 @@ main{max-width:1560px;width:100%;margin:0 auto;padding-top:34px}header{min-heigh
  .settings-source-card{padding:16px}.settings-source-copy p{font-size:11px}
 }
 @keyframes android-sheet-in{from{opacity:.6;transform:translateY(32px)}to{opacity:1;transform:none}}
+
+
+/* Android motion system */
+@media(max-width:980px){
+ :root{--motion-standard:cubic-bezier(.2,0,0,1);--motion-emphasized:cubic-bezier(.2,0,0,1);--motion-decelerate:cubic-bezier(0,0,0,1)}
+ .card,.metric,.dashboard-hero,.bill-summary{animation:android-surface-in 260ms var(--motion-decelerate) both;transition:background-color 160ms var(--motion-standard),box-shadow 200ms var(--motion-standard)}
+ .grid>*:nth-child(2),.dashboard-grid>*:nth-child(2){animation-delay:24ms}.grid>*:nth-child(3){animation-delay:48ms}.grid>*:nth-child(4){animation-delay:72ms}
+ .card:hover,.metric:hover{transform:none}
+ button,.btn,.icon-btn,.text-btn,.activity-row,.chart-row,.bill-item,.bottom-nav button{transition:transform 120ms var(--motion-standard),background-color 160ms var(--motion-standard),color 160ms var(--motion-standard),box-shadow 180ms var(--motion-standard)}
+ button:active,.btn:active,.icon-btn:active,.activity-row:active,.chart-row:active,.bill-item:active{transform:scale(.97)}
+ .bottom-nav button:active{transform:scale(.9)}
+ .bottom-nav button.active .nav-icon{animation:android-nav-select 220ms var(--motion-decelerate) both}
+ .bottom-nav button.active:after{animation:android-indicator-in 220ms var(--motion-decelerate) both;transform-origin:center}
+ .fab{transition:transform 240ms var(--motion-emphasized),border-radius 240ms var(--motion-emphasized),box-shadow 180ms var(--motion-standard)}
+ .fab:active{transform:scale(.9)}.fab-wrap.open .fab{transform:rotate(45deg);border-radius:50%}
+ .fab-menu{transition:opacity 160ms var(--motion-standard),transform 220ms var(--motion-decelerate)}
+ .fab-menu button{animation:none}.fab-wrap.open .fab-menu button{animation:android-fab-item 220ms var(--motion-decelerate) both}.fab-wrap.open .fab-menu button:nth-child(2){animation-delay:35ms}
+ .modal-backdrop,.confirm-backdrop,.setup-gate{animation:android-scrim-in 180ms linear both}
+ .modal-card,.confirm-card,.setup-card{animation:android-sheet-in 320ms var(--motion-emphasized) both}
+ .toast.show{animation:android-snackbar-in 250ms var(--motion-decelerate) both}
+ .alert-summary[open] .alert-detail{animation:android-expand 220ms var(--motion-decelerate) both;transform-origin:top}
+ .progress span{animation:android-progress 500ms var(--motion-decelerate) both;transform-origin:left}
+ .type-switch input:checked+span{animation:android-segment-select 180ms var(--motion-decelerate) both}
+ .pagination .btn:not(:disabled):active{transform:scale(.94)}
+ .skeleton-line{animation:android-pulse 1200ms ease-in-out infinite;background:linear-gradient(90deg,#e6ebe6 30%,#f4f6f3 50%,#e6ebe6 70%);background-size:220% 100%}
+}
+@keyframes android-surface-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes android-nav-select{from{transform:scale(.82);opacity:.55}to{transform:scale(1);opacity:1}}
+@keyframes android-indicator-in{from{transform:scaleX(.25);opacity:0}to{transform:scaleX(1);opacity:1}}
+@keyframes android-fab-item{from{opacity:0;transform:translateY(14px) scale(.82)}to{opacity:1;transform:none}}
+@keyframes android-scrim-in{from{opacity:0}to{opacity:1}}
+@keyframes android-sheet-in{from{opacity:.7;transform:translateY(100%)}to{opacity:1;transform:none}}
+@keyframes android-snackbar-in{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+@keyframes android-expand{from{opacity:0;transform:scaleY(.92) translateY(-4px)}to{opacity:1;transform:none}}
+@keyframes android-progress{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes android-segment-select{from{opacity:.65;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes android-pulse{0%{background-position:100% 0}100%{background-position:-100% 0}}
+@media(max-width:980px) and (prefers-reduced-motion:reduce){.card,.metric,.dashboard-hero,.bill-summary,.modal-backdrop,.confirm-backdrop,.setup-gate,.modal-card,.confirm-card,.setup-card,.toast.show,.progress span,.bottom-nav button.active .nav-icon,.bottom-nav button.active:after{animation:none!important}}

@@ -1,5 +1,5 @@
-const CACHE = 'zigs-fi-shell-v31';
-const SHELL = ['./','./index.html','./tutorial.html','./src/styles.css?v=33','./src/app.js?v=32','./src/utils.js','./manifest.webmanifest','./icons/icon-192.png?v=2','./icons/icon-512.png?v=2','./icons/icon-maskable-512.png?v=2','./apps-script/Code.gs?v=2'];
+const CACHE = 'zigs-fi-shell-v32';
+const SHELL = ['./','./index.html','./tutorial.html','./src/styles.css?v=34','./src/app.js?v=32','./src/utils.js','./manifest.webmanifest','./icons/icon-192.png?v=2','./icons/icon-512.png?v=2','./icons/icon-maskable-512.png?v=2','./apps-script/Code.gs?v=2'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
