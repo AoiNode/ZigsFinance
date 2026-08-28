@@ -61,6 +61,7 @@ let pendingDeleteTimer = null;
 let quickTxType = "";
 let isBillFormOpen = false;
 let isSourceFormOpen = false;
+let setupRemoteHasData = false;
 
 init();
 
@@ -720,7 +721,8 @@ function applySetupGateIfNeeded() {
     const message = document.getElementById("setupState");
     message.textContent = "Menguji koneksi...";
     const test = await validateSetupValues(fd);
-    message.textContent = test.ok ? "Koneksi valid." : test.message;
+    setupRemoteHasData = !!test.remoteHasData;
+    message.textContent = test.ok ? (setupRemoteHasData ? "Koneksi valid. Data lama ditemukan—pulihkan sebelum melanjutkan." : "Koneksi valid. Spreadsheet masih kosong.") : test.message;
   };
   document.getElementById("firstSetupForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -729,6 +731,18 @@ function applySetupGateIfNeeded() {
     const message = document.getElementById("setupState");
     if (!result.ok) {
       message.textContent = result.message;
+      return;
+    }
+    if (result.remoteHasData) {
+      gate.innerHTML = `<div class="setup-card"><span class="eyebrow">Data ditemukan</span><h2>Pulihkan data lama?</h2><p>Spreadsheet sudah berisi data. Pulihkan dahulu agar perangkat baru tidak menimpa data dengan kondisi kosong.</p><div class="setup-actions"><button id="restoreSheetBtn" class="btn" type="button">Pulihkan dari Spreadsheet</button><button id="cancelRestoreBtn" class="btn ghost" type="button">Kembali</button></div><small id="setupState" class="setup-status">Menunggu pilihanmu.</small></div>`;
+      document.getElementById("restoreSheetBtn").onclick = async () => {
+        const status = document.getElementById("setupState");
+        status.textContent = "Memuat data dari Spreadsheet...";
+        const restored = await loadStateFromGoogleSheet(state.settings.appsScriptUrl);
+        if (!restored.ok) { status.textContent = restored.message; return; }
+        gate.classList.add("hidden"); render(); showToast("Data berhasil dipulihkan");
+      };
+      document.getElementById("cancelRestoreBtn").onclick = () => applySetupGateIfNeeded();
       return;
     }
     message.textContent = "Sukses. Memuat halaman utama...";
@@ -743,13 +757,14 @@ async function validateSetupValues(formData) {
   if (!validateSheetUrl(sheetUrl)) return { ok: false, message: "Link Google Sheet tidak valid." };
   if (!appsScriptUrl.startsWith("https://script.google.com/")) return { ok: false, message: "URL Apps Script tidak valid." };
   try {
-    const ping = await fetch(`${appsScriptUrl}?action=ping`);
+    const ping = await fetch(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" });
     const data = await ping.json().catch(() => ({}));
     if (!ping.ok || data.ok === false) return { ok: false, message: data.message || "Ping ke Apps Script gagal." };
+    return { ok: true, remoteHasData: !!data.remoteHasData };
   } catch {
     return { ok: false, message: "Tidak bisa terhubung ke Apps Script." };
   }
-  return { ok: true };
+  return { ok: true, remoteHasData: false };
 }
 
 async function saveDataSourceFromForm(formData) {
@@ -768,9 +783,25 @@ async function saveDataSourceFromForm(formData) {
   state.settings.appsScriptUrl = appsScriptUrl;
   state.settings.lastSourceChangeAt = new Date().toISOString();
   saveState();
-  return { ok: true };
+  return { ok: true, remoteHasData: validation.remoteHasData };
 }
 
+async function loadStateFromGoogleSheet(appsScriptUrl) {
+  try {
+    const response = await fetch(`${appsScriptUrl}?action=load&ts=${Date.now()}`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || !data.ok || !data.payload) throw new Error(data.message || "Data Spreadsheet gagal dimuat.");
+    const sourceSettings = { ...state.settings };
+    const restored = normalizeState({ ...data.payload, settings: { ...(data.payload.settings || {}), ...sourceSettings, hasPendingSync: false, lastSyncedAt: new Date().toISOString() } });
+    Object.keys(state).forEach(key => delete state[key]);
+    Object.assign(state, restored);
+    addAudit("restore_from_google_sheet", `${state.transactions.length} transaksi`);
+    saveState(false);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error.message || "Pemulihan gagal." };
+  }
+}
 
 async function syncToGoogleSheet() {
   const { appsScriptUrl, sheetUrl } = state.settings;
@@ -782,6 +813,15 @@ async function syncToGoogleSheet() {
   }
   setSyncVisual("loading");
   try {
+    const localIsEmpty = state.transactions.length === 0 && state.budgets.length === 0 && state.bills.length === 0 && state.goals.length === 0;
+    if (localIsEmpty) {
+      const probe = await fetch(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" }).then(response => response.json());
+      if (probe.remoteHasData) {
+        setSyncVisual("error");
+        showToast("REMOTE_DATA_EXISTS: Spreadsheet sudah berisi data. Pulihkan dari Spreadsheet terlebih dahulu.");
+        return;
+      }
+    }
     const params = new URLSearchParams();
     params.set("payload", JSON.stringify({ action: "sync", sheetUrl, payload: state }));
     const r = await fetch(appsScriptUrl, { method: "POST", body: params });

@@ -3,11 +3,12 @@ const REQUIRED_TABS = ["accounts", "transactions", "budgets", "goals", "debts", 
 
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
-  if (action === "ping") {
+  if (action === "ping" || action === "load") {
     try {
       var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       ensureRequiredTabs(ss);
-      return json({ ok: true, message: "connected" });
+      if (action === "load") return json({ ok: true, payload: loadState(ss) });
+      return json({ ok: true, message: "connected", remoteHasData: remoteHasData(ss) });
     } catch (err) {
       return json({ ok: false, message: err.message });
     }
@@ -80,6 +81,47 @@ function upsertSheet(ss, name, header, rows) {
   });
 
   sh.getRange(2, 1, values.length, header.length).setValues(values);
+}
+
+function readSheetObjects(ss, name) {
+  var sh = ss.getSheetByName(name);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var values = sh.getDataRange().getValues();
+  var header = values.shift().map(String);
+  return values.filter(function(row) { return row.some(function(v) { return v !== ""; }); }).map(function(row) {
+    var obj = {};
+    header.forEach(function(key, i) { obj[key] = row[i]; });
+    return obj;
+  });
+}
+
+function readSettings(ss) {
+  var result = {};
+  readSheetObjects(ss, "settings").forEach(function(row) {
+    var value = row.value;
+    try { value = JSON.parse(value); } catch (_) {}
+    result[row.key] = value;
+  });
+  return result;
+}
+
+function loadState(ss) {
+  return {
+    accounts: readSheetObjects(ss, "accounts"),
+    transactions: readSheetObjects(ss, "transactions"),
+    budgets: readSheetObjects(ss, "budgets"),
+    goals: readSheetObjects(ss, "goals"),
+    bills: readSheetObjects(ss, "debts"),
+    settings: readSettings(ss),
+    auditLog: readSheetObjects(ss, "audit_log")
+  };
+}
+
+function remoteHasData(ss) {
+  return ["accounts", "transactions", "budgets", "goals", "debts", "audit_log"].some(function(name) {
+    var sh = ss.getSheetByName(name);
+    return sh && sh.getLastRow() > 1;
+  });
 }
 
 function flattenSettings(settings) {
