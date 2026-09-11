@@ -149,3 +149,27 @@ main{max-width:1560px;width:100%;margin:0 auto;padding-top:34px}header{min-heigh
 /* Premium navigation iconography */
 .nav-icon svg{fill:none!important;stroke:currentColor;overflow:visible}.sidebar .nav-icon{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;transition:background-color .18s,color .18s,transform .18s}.sidebar nav button.active .nav-icon{background:#e4f4ce;color:#123d31}.sidebar nav button:hover .nav-icon{transform:scale(1.04)}
 @media(max-width:980px){.bottom-nav .nav-icon svg{fill:none!important;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}.bottom-nav .nav-icon{position:relative}.bottom-nav button.active .nav-icon{background:linear-gradient(145deg,#dff3c8,#cfeeaa);box-shadow:inset 0 0 0 1px rgba(18,61,49,.06)}.bottom-nav button.active .nav-icon:after{content:'';position:absolute;inset:-3px;border-radius:16px;border:1px solid rgba(185,243,106,.25)}.bottom-nav button:not(.active) .nav-icon{opacity:.82}.bottom-nav button:not(.active):active .nav-icon{background:#edf1ed}.bottom-nav .nav-icon svg{width:20px;height:20px}.bottom-nav button.active .nav-icon svg{stroke-width:2.05}.sidebar .nav-icon svg{width:20px;height:20px}}
+
+
+/* Period scope (harian / mingguan / bulanan) */
+.period-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px}
+.report-period{margin-top:0;margin-bottom:0}
+.period-switch{display:inline-flex;gap:4px;padding:4px;border-radius:15px;background:#e9ede9}
+.period-option{min-height:38px;padding:0 17px;border:0;border-radius:11px;background:transparent;color:#5f6b65;font-size:13px;font-weight:800;transition:background .18s,color .18s,box-shadow .18s}
+.period-option:hover{color:#123d31}
+.period-option.active{background:#fff;color:#123d31;box-shadow:0 2px 9px rgba(18,61,49,.12)}
+.period-range{font-size:12px;font-weight:700;color:var(--muted);white-space:nowrap}
+.report-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.report-totals>div{min-width:0;padding:15px;border-radius:15px;background:#f5f8f4;display:grid;gap:5px}
+.report-totals small{font-size:11px;font-weight:700;color:var(--muted)}
+.report-totals strong{font:700 19px Manrope,sans-serif;letter-spacing:-.6px;overflow-wrap:anywhere}
+.report-totals strong.masuk{color:#147452}
+.report-totals strong.keluar{color:#b43e38}
+@media(max-width:560px){
+ .period-bar{margin-top:12px;gap:8px}
+ .period-switch{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+ .period-option{min-height:42px;padding:0 6px;font-size:12px}
+ .period-range{width:100%;text-align:right;font-size:11px}
+ .report-totals{grid-template-columns:1fr;gap:8px}
+ .report-totals>div{padding:13px}
+}
