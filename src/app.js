@@ -950,6 +950,72 @@ async function syncToGoogleSheet() {
   }
 }
 
+const SYNC_MAX_ATTEMPTS = 3;
+const SYNC_TIMEOUT_MS = 45000;
+
+/** Tunggu singkat dengan backoff sebelum mengulang gangguan sementara Google. */
+function wait(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+/**
+ * Kirim satu POST sync dengan timeout dan diagnosis respons yang ketat.
+ *
+ * Apps Script sesekali dapat menjawab 429/5xx, koneksi terputus, atau halaman HTML sementara.
+ * Semua itu bersifat sementara dan aman dicoba ulang karena payload sync menggambarkan state
+ * lengkap (idempotent), bukan perintah "tambah satu baris".
+ */
+async function postSyncOnce(appsScriptUrl, body) {
+  const response = await fetchWithTimeout(appsScriptUrl, {
+    method: "POST",
+    body,
+    cache: "no-store"
+  }, SYNC_TIMEOUT_MS);
+  const text = await response.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch {}
+
+  if (!response.ok) {
+    const error = new Error(data?.message || `Server Google merespons HTTP ${response.status}`);
+    error.transient = response.status === 408 || response.status === 429 || response.status >= 500;
+    error.status = response.status;
+    throw error;
+  }
+  if (!data || typeof data !== "object") {
+    const error = new Error("Respons Apps Script tidak valid. Pastikan URL berakhiran /exec dan deployment masih aktif.");
+    error.transient = true;
+    throw error;
+  }
+  if (data.ok === false) {
+    const error = new Error(data.message || "Apps Script menolak sinkronisasi.");
+    error.transient = !!data.retryable;
+    throw error;
+  }
+  if (data.ok !== true) {
+    const error = new Error("Apps Script tidak mengonfirmasi hasil sinkronisasi.");
+    error.transient = true;
+    throw error;
+  }
+  return data;
+}
+
+/** Maksimal tiga percobaan untuk error sementara; error konfigurasi tidak diulang. */
+async function postSyncWithRetry(appsScriptUrl, body, onRetry) {
+  let lastError;
+  for (let attempt = 1; attempt <= SYNC_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await postSyncOnce(appsScriptUrl, body);
+    } catch (error) {
+      lastError = error;
+      const transient = error?.name === "AbortError" || error?.transient === true || error instanceof TypeError;
+      if (!transient || attempt === SYNC_MAX_ATTEMPTS) break;
+      onRetry?.(attempt + 1, SYNC_MAX_ATTEMPTS);
+      await wait(500 * (2 ** (attempt - 1)));
+    }
+  }
+  throw lastError;
+}
+
 async function performGoogleSheetSync() {
   const { appsScriptUrl, sheetUrl } = state.settings;
   if (!sheetUrl || !appsScriptUrl) {
@@ -962,7 +1028,9 @@ async function performGoogleSheetSync() {
   try {
     const localIsEmpty = state.transactions.length === 0 && state.budgets.length === 0 && state.bills.length === 0 && state.goals.length === 0;
     if (localIsEmpty) {
-      const probe = await fetch(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" }).then(response => response.json());
+      const probeResponse = await fetchWithTimeout(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" }, 20000);
+      const probe = await probeResponse.json();
+      if (!probeResponse.ok || probe.ok === false) throw new Error(probe.message || "Pemeriksaan Spreadsheet gagal.");
       if (probe.remoteHasData) {
         setSyncVisual("error");
         showToast("REMOTE_DATA_EXISTS: Spreadsheet sudah berisi data. Pulihkan dari Spreadsheet terlebih dahulu.");
@@ -973,16 +1041,9 @@ async function performGoogleSheetSync() {
     // Payload disusun oleh syncPayload() (murni, dites terpisah): membuang status lokal yang
     // berubah di sekitar sync dan membatasi panjang jejak aktivitas. Lihat src/utils.js.
     params.set("payload", JSON.stringify(syncPayload(state)));
-    const r = await fetch(appsScriptUrl, { method: "POST", body: params });
-    const text = await r.text();
-    let data = {};
-    try { data = JSON.parse(text); } catch {}
-    if (!r.ok || data.ok === false) {
-      const msg = `Sinkron gagal${data.message ? `: ${data.message}` : ""}`;
-      setSyncVisual("error");
-      showToast(msg);
-      return;
-    }
+    const data = await postSyncWithRetry(appsScriptUrl, params, (attempt, total) => {
+      showToast(`Koneksi Google terganggu — mencoba lagi (${attempt}/${total})…`);
+    });
     setSyncVisual("success");
     showToast(syncResultMessage(data));
     addAudit("sync_google_sheet", "success");
@@ -990,7 +1051,10 @@ async function performGoogleSheetSync() {
     state.settings.hasPendingSync = false;
     saveState(false);
   } catch (err) {
-    const msg = `Sinkron gagal: ${err?.message || "kesalahan jaringan"}`;
+    const detail = err?.name === "AbortError"
+      ? "Google terlalu lama merespons. Coba lagi sebentar."
+      : (err?.message || "Kesalahan jaringan.");
+    const msg = `Sinkron gagal: ${detail}`;
     setSyncVisual("error");
     showToast(msg);
   }

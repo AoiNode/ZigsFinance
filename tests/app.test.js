@@ -227,6 +227,37 @@ test("perubahan URL Apps Script saja tetap dianggap pergantian sumber", async ()
   assert.match(app, /newAppsScriptUrl/);
 });
 
+test("sync mencoba ulang gangguan sementara sebelum menjadi merah", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+
+  assert.match(app, /const SYNC_MAX_ATTEMPTS = 3/);
+  assert.match(app, /const SYNC_TIMEOUT_MS = 45000/);
+  assert.match(app, /function postSyncOnce\(/);
+  assert.match(app, /function postSyncWithRetry\(/);
+  assert.match(app, /response\.status === 408 \|\| response\.status === 429 \|\| response\.status >= 500/,
+    "408, 429, dan 5xx harus dianggap sementara");
+  assert.match(app, /error\?\.name === "AbortError"/,
+    "timeout harus boleh dicoba ulang");
+  assert.match(app, /error instanceof TypeError/,
+    "kegagalan jaringan fetch harus boleh dicoba ulang");
+  assert.match(app, /await wait\(500 \* \(2 \*\* \(attempt - 1\)\)\)/,
+    "retry harus memakai backoff, bukan menembak Google terus-menerus");
+  assert.match(app, /Koneksi Google terganggu — mencoba lagi/,
+    "pengguna harus tahu aplikasi sedang memulihkan gangguan");
+  assert.match(app, /postSyncWithRetry\(appsScriptUrl, params/,
+    "alur sync utama harus benar-benar memakai retry wrapper");
+});
+
+test("Apps Script mengunci penulisan agar dua perangkat tidak bertabrakan", async () => {
+  const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
+  assert.match(gs, /LockService\.getScriptLock\(\)/);
+  assert.match(gs, /lock\.tryLock\(25000\)/);
+  assert.match(gs, /retryable: true/,
+    "lock contention harus memberi tahu client bahwa request aman dicoba ulang");
+  assert.match(gs, /if \(lock\.hasLock\(\)\) lock\.releaseLock\(\)/,
+    "lock wajib dilepas di finally");
+});
+
 test("klik sync berulang tidak membuat beberapa POST paralel", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   assert.match(app, /let syncInFlight = null/, "harus ada penyimpan Promise sync aktif");
@@ -328,7 +359,7 @@ test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () 
   assert.match(tutorial, /\.toc-links\{display:flex[^}]*overflow-x:auto/);
 
   // Kode di tutorial harus berasal dari file backend terbaru, bukan salinan lama dalam HTML.
-  assert.match(tutorial, /apps-script\/Code\.gs\?v=5/);
+  assert.match(tutorial, /apps-script\/Code\.gs\?v=6/);
   assert.match(gs, /function fingerprint\(/, "Code.gs harus versi sync cepat");
   assert.match(gs, /dilewati\.push/, "Code.gs harus melewati tabel yang tidak berubah");
   assert.match(tutorial, /sync hanya menulis tabel yang berubah/);

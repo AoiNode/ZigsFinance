@@ -66,7 +66,13 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  var lock = LockService.getScriptLock();
   try {
+    /* Dua tab/perangkat dapat menekan Sync bersamaan. Tanpa lock, keduanya bisa
+       clearContents lalu setValues pada sheet yang sama secara bersilangan. */
+    if (!lock.tryLock(25000)) {
+      return json({ ok: false, retryable: true, message: "Sinkronisasi lain masih berjalan. Mencoba lagi." });
+    }
     var body = parseBody(e);
     if (body.action !== "sync") throw new Error("unsupported action");
 
@@ -130,6 +136,8 @@ function doPost(e) {
     });
   } catch (err) {
     return json({ ok: false, message: err.message });
+  } finally {
+    if (lock.hasLock()) lock.releaseLock();
   }
 }
 
