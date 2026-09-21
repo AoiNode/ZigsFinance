@@ -1,7 +1,7 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, inPeriod, sumInPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog } from "../src/utils.js";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, inPeriod, sumInPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "../src/utils.js";
 
 test("validateSheetUrl only accepts Google Sheets URL", () => {
   assert.equal(validateSheetUrl("https://docs.google.com/spreadsheets/d/abc123/edit"), true);
@@ -181,6 +181,50 @@ test("trimAuditLog tahan terhadap nilai aneh", () => {
   assert.deepEqual(trimAuditLog("bukan array"), []);
   assert.deepEqual(trimAuditLog([1, 2, 3], 2), [1, 2]);
   assert.deepEqual(trimAuditLog([1, 2], 5), [1, 2]);
+});
+
+test("helper sumber data menampilkan ID aktif dengan aman", () => {
+  const url = "https://docs.google.com/spreadsheets/d/1V_8FKX2Mgkx79GEG0A9myMtOWaJyvQzXjlzfKBgXimU/edit?gid=0#gid=0";
+  assert.equal(spreadsheetId(url), "1V_8FKX2Mgkx79GEG0A9myMtOWaJyvQzXjlzfKBgXimU");
+  assert.equal(spreadsheetId("bukan link"), "");
+  assert.equal(compactId("1234567890ABCDEFGHIJ"), "12345678…EFGHIJ");
+  assert.equal(compactId("pendek"), "pendek");
+});
+
+test("form ganti sumber selalu memberi feedback, timeout, dan bukti simpan", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+
+  // feedback inline + loading
+  assert.match(app, /id="sourceFormStatus"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(app, /id="saveSourceBtn"/);
+  assert.match(app, /submit\.disabled = true/);
+  assert.match(app, /submit\.textContent = "Menguji koneksi…"/);
+  assert.match(app, /status\.className = "source-form-status success"/);
+  assert.match(app, /status\.className = "source-form-status error"/);
+
+  // request tidak boleh menggantung tanpa batas
+  assert.match(app, /function fetchWithTimeout\(/);
+  assert.match(app, /new AbortController\(\)/);
+  assert.match(app, /lebih dari 15 detik/);
+
+  // setelah menulis localStorage, baca balik sebelum mengaku sukses
+  assert.match(app, /JSON\.parse\(localStorage\.getItem\(DB_KEY\)/);
+  assert.match(app, /stored\?\.settings\?\.sheetUrl !== next/);
+  assert.match(app, /stored\?\.settings\?\.appsScriptUrl !== appsScriptUrl/);
+
+  // kartu Pengaturan menampilkan bukti sumber yang benar-benar aktif
+  assert.match(app, /ID aktif:/);
+  assert.match(app, /active-source-endpoint/);
+});
+
+test("perubahan URL Apps Script saja tetap dianggap pergantian sumber", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(app, /const sheetChanged = oldSheet !== next/);
+  assert.match(app, /const scriptChanged = oldScript !== appsScriptUrl/);
+  assert.match(app, /const sourceChanged = sheetChanged \|\| scriptChanged/);
+  assert.match(app, /if \(sourceChanged\) state\.settings\.hasPendingSync = true/);
+  assert.match(app, /oldAppsScriptUrl/);
+  assert.match(app, /newAppsScriptUrl/);
 });
 
 test("klik sync berulang tidak membuat beberapa POST paralel", async () => {

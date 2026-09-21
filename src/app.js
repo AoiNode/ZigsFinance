@@ -1,7 +1,7 @@
 ﻿// Versi pada impor ini WAJIB ada dan ikut dinaikkan setiap kali utils.js berubah.
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog } from "./utils.js?v=2";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=3";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -741,18 +741,48 @@ function renderSettings() {
   const historyPage = paginate(s.sourceHistory, "sourceHistory");
   const auditPage = paginate(state.auditLog, "auditLog");
   const lastSyncedLabel = s.lastSyncedAt ? new Date(s.lastSyncedAt).toLocaleString("id-ID") : "Belum pernah";
-  const sourceForm = isSourceFormOpen ? `<form id="sourceForm" class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div class="source-form-actions"><button class="btn">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form>` : "";
+  const activeSheetId = spreadsheetId(s.sheetUrl);
+  const sourceForm = isSourceFormOpen ? `<form id="sourceForm" class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div id="sourceFormStatus" class="source-form-status" role="status" aria-live="polite"></div><div class="source-form-actions"><button id="saveSourceBtn" class="btn" type="submit">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form>` : "";
   const historyRows = historyPage.items.map(h => `<div class="setting-log-row"><span class="setting-log-icon">${icon("sync")}</span><div><strong>Sumber diperbarui</strong><small>${new Date(h.at).toLocaleString("id-ID")}</small><p>${escapeHtml(h.reason || "Tanpa alasan")}</p></div></div>`).join("");
   const auditRows = auditPage.items.map(l => `<div class="setting-log-row"><span class="setting-log-dot"></span><div><strong>${escapeHtml(l.action)}</strong><small>${new Date(l.at).toLocaleString("id-ID")}</small><p>${escapeHtml(l.detail || "Tanpa detail")}</p></div></div>`).join("");
-  setContent(`<div class="settings-premium"><section class="settings-source-card card"><div class="settings-source-icon">${icon("report")}</div><div class="settings-source-copy"><span class="section-kicker">Penyimpanan utama</span><h3>Google Spreadsheet</h3><p>Sumber data aktif dan siap menyimpan perubahan keuanganmu.</p></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber"}</button></section>${sourceForm}<section class="card settings-status-card"><div class="card-title-row"><div><span class="section-kicker">Koneksi</span><h3>Status sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><div class="settings-status-time"><span>Sinkron terakhir</span><strong>${lastSyncedLabel}</strong></div><p>${s.hasPendingSync ? "Ada perubahan lokal yang menunggu dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah selaras."}</p></section><section class="card settings-history-card"><div class="card-title-row"><div><span class="section-kicker">Perubahan koneksi</span><h3>Riwayat sumber</h3></div><span class="count-chip">${s.sourceHistory.length}</span></div><div class="setting-log-list">${historyRows || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}</div>${historyPage.controls}</section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Aktivitas aplikasi</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${state.auditLog.length}</span></div><div class="setting-log-list">${auditRows || emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}</div>${auditPage.controls}</section></div>`);
+  setContent(`<div class="settings-premium"><section class="settings-source-card card"><div class="settings-source-icon">${icon("report")}</div><div class="settings-source-copy"><span class="section-kicker">Penyimpanan utama</span><h3>Google Spreadsheet</h3><p>${activeSheetId ? `ID aktif: <code>${escapeHtml(compactId(activeSheetId))}</code>` : "Sumber data belum dipilih."}</p><small class="active-source-endpoint">Apps Script: ${s.appsScriptUrl ? escapeHtml(compactId(s.appsScriptUrl, 34, 8)) : "belum diisi"}</small></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber"}</button></section>${sourceForm}<section class="card settings-status-card"><div class="card-title-row"><div><span class="section-kicker">Koneksi</span><h3>Status sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><div class="settings-status-time"><span>Sinkron terakhir</span><strong>${lastSyncedLabel}</strong></div><p>${s.hasPendingSync ? "Ada perubahan lokal yang menunggu dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah selaras."}</p></section><section class="card settings-history-card"><div class="card-title-row"><div><span class="section-kicker">Perubahan koneksi</span><h3>Riwayat sumber</h3></div><span class="count-chip">${s.sourceHistory.length}</span></div><div class="setting-log-list">${historyRows || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}</div>${historyPage.controls}</section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Aktivitas aplikasi</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${state.auditLog.length}</span></div><div class="setting-log-list">${auditRows || emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}</div>${auditPage.controls}</section></div>`);
   const form = document.getElementById("sourceForm");
   if (!form) return;
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const f = new FormData(e.target);
-    const res = await saveDataSourceFromForm(f);
-    showToast(res.ok ? "Sumber tersimpan dan koneksi berhasil" : `Gagal: ${res.message}`);
-    if (res.ok) { isSourceFormOpen = false; render(); }
+    const submit = document.getElementById("saveSourceBtn");
+    const status = document.getElementById("sourceFormStatus");
+    const originalLabel = submit.textContent;
+    submit.disabled = true;
+    submit.setAttribute("aria-busy", "true");
+    submit.textContent = "Menguji koneksi…";
+    status.className = "source-form-status loading";
+    status.textContent = "Menghubungi Apps Script dan memeriksa sumber data…";
+
+    try {
+      const f = new FormData(e.target);
+      const res = await saveDataSourceFromForm(f);
+      if (!res.ok) {
+        status.className = "source-form-status error";
+        status.textContent = res.message;
+        showToast(`Gagal menyimpan sumber: ${res.message}`);
+        return;
+      }
+      status.className = "source-form-status success";
+      status.textContent = `Tersimpan. Sumber aktif: ${compactId(spreadsheetId(state.settings.sheetUrl))}`;
+      showToast("Sumber data tersimpan dan koneksi berhasil");
+      // Biarkan pesan sukses terlihat sebentar sebelum form ditutup dan halaman dirender ulang.
+      window.setTimeout(() => { isSourceFormOpen = false; render(); }, 650);
+    } catch (error) {
+      const message = error?.message || "Kesalahan tidak terduga.";
+      status.className = "source-form-status error";
+      status.textContent = message;
+      showToast(`Gagal menyimpan sumber: ${message}`);
+    } finally {
+      submit.disabled = false;
+      submit.removeAttribute("aria-busy");
+      submit.textContent = originalLabel;
+    }
   };
 }
 
@@ -801,20 +831,36 @@ function applySetupGateIfNeeded() {
   };
 }
 
+/** Fetch dengan batas waktu. Tanpa timeout, Apps Script yang macet membuat form tampak tidak
+ * merespons selamanya — tidak tersimpan dan tidak ada pesan apa pun. */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function validateSetupValues(formData) {
   const sheetUrl = String(formData.get("sheetUrl") || "").trim();
   const appsScriptUrl = String(formData.get("appsScriptUrl") || "").trim();
   if (!validateSheetUrl(sheetUrl)) return { ok: false, message: "Link Google Sheet tidak valid." };
   if (!appsScriptUrl.startsWith("https://script.google.com/")) return { ok: false, message: "URL Apps Script tidak valid." };
   try {
-    const ping = await fetch(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" });
+    const ping = await fetchWithTimeout(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" });
     const data = await ping.json().catch(() => ({}));
     if (!ping.ok || data.ok === false) return { ok: false, message: data.message || "Ping ke Apps Script gagal." };
     return { ok: true, remoteHasData: !!data.remoteHasData };
-  } catch {
-    return { ok: false, message: "Tidak bisa terhubung ke Apps Script." };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error?.name === "AbortError"
+        ? "Apps Script terlalu lama merespons (lebih dari 15 detik). Pastikan deployment aktif dan aksesnya 'Anyone'."
+        : "Tidak bisa terhubung ke Apps Script. Periksa URL deployment dan akses Web App."
+    };
   }
-  return { ok: true, remoteHasData: false };
 }
 
 async function saveDataSourceFromForm(formData) {
@@ -823,17 +869,48 @@ async function saveDataSourceFromForm(formData) {
   const next = String(formData.get("sheetUrl") || "").trim();
   const appsScriptUrl = String(formData.get("appsScriptUrl") || "").trim();
   const reason = String(formData.get("reason") || "").trim();
-  const old = state.settings.sheetUrl;
-  if (old && old !== next) {
+  const oldSheet = state.settings.sheetUrl;
+  const oldScript = state.settings.appsScriptUrl;
+  const sheetChanged = oldSheet !== next;
+  const scriptChanged = oldScript !== appsScriptUrl;
+  const sourceChanged = sheetChanged || scriptChanged;
+
+  if (sourceChanged && (oldSheet || oldScript)) {
     download(`backup-before-source-change-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state, null, 2), "application/json");
-    state.settings.sourceHistory.unshift({ at: new Date().toISOString(), old, new: next, reason });
-    addAudit("change_sheet_source", `${old} -> ${next}`);
+    state.settings.sourceHistory.unshift({
+      at: new Date().toISOString(),
+      old: oldSheet,
+      new: next,
+      oldAppsScriptUrl: oldScript,
+      newAppsScriptUrl: appsScriptUrl,
+      reason
+    });
+    const changes = [
+      sheetChanged ? `Sheet ${spreadsheetId(oldSheet) || "(kosong)"} -> ${spreadsheetId(next)}` : null,
+      scriptChanged ? "URL Apps Script diperbarui" : null
+    ].filter(Boolean).join("; ");
+    addAudit("change_data_source", changes);
   }
+
   state.settings.sheetUrl = next;
   state.settings.appsScriptUrl = appsScriptUrl;
   state.settings.lastSourceChangeAt = new Date().toISOString();
-  saveState();
-  return { ok: true, remoteHasData: validation.remoteHasData };
+  // Ganti sumber berarti data lokal belum pernah dikirim ke tujuan baru.
+  if (sourceChanged) state.settings.hasPendingSync = true;
+  saveState(false);
+
+  // Baca balik dari localStorage sebelum mengaku sukses. Ini menangkap kegagalan storage/quota
+  // yang sebelumnya diam-diam terlihat seperti "tidak kesimpan".
+  try {
+    const stored = JSON.parse(localStorage.getItem(DB_KEY) || "{}");
+    if (stored?.settings?.sheetUrl !== next || stored?.settings?.appsScriptUrl !== appsScriptUrl) {
+      throw new Error("Data sumber tidak tersimpan di perangkat. Penyimpanan browser mungkin penuh atau diblokir.");
+    }
+  } catch (error) {
+    return { ok: false, message: error?.message || "Gagal membaca kembali sumber yang disimpan." };
+  }
+
+  return { ok: true, remoteHasData: validation.remoteHasData, changed: sourceChanged };
 }
 
 async function loadStateFromGoogleSheet(appsScriptUrl) {

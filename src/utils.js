@@ -2,6 +2,19 @@
   return /^https:\/\/docs\.google\.com\/spreadsheets\/d\/.+/.test(url);
 }
 
+/** Ambil ID Spreadsheet untuk ditampilkan sebagai bukti sumber yang sedang aktif. */
+export function spreadsheetId(url) {
+  const match = String(url || "").match(/\/spreadsheets\/d\/([^/?#]+)/);
+  return match ? match[1] : "";
+}
+
+/** Ringkas ID panjang tanpa menyamarkan identitas sumber sepenuhnya. */
+export function compactId(value, head = 8, tail = 6) {
+  const text = String(value || "");
+  if (text.length <= head + tail + 1) return text;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
+
 export function parseCsv(text) {
   const cleaned = String(text || "").replace(/^\uFEFF/, "").trim();
   if (!cleaned) return [];
