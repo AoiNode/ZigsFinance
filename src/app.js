@@ -1,7 +1,7 @@
 ﻿// Versi pada impor ini WAJIB ada dan ikut dinaikkan setiap kali utils.js berubah.
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey } from "./utils.js?v=1";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog } from "./utils.js?v=2";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -53,6 +53,8 @@ let pageHistory = ["dashboard"];
 let editTxId = null;
 let syncVisualStatus = "idle";
 let syncVisualTimer = null;
+// Pengaman agar klik berulang tidak mengirim 2-3 sinkronisasi penuh secara paralel.
+let syncInFlight = null;
 let isSidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
 const loadedPages = new Set();
 const loadingPages = new Set();
@@ -199,7 +201,12 @@ function initRupiahInputs() {
     if (input instanceof HTMLInputElement && input.dataset.rupiah === "1") formatRupiahInput(input);
   });
 }
-function addAudit(action, detail) { state.auditLog.unshift({ id: id(), at: new Date().toISOString(), action, detail }); }
+function addAudit(action, detail) {
+  state.auditLog.unshift({ id: id(), at: new Date().toISOString(), action, detail });
+  // Batasi panjangnya. Entri baru bertambah setiap kali sync berhasil, dan seluruh isi log ikut
+  // dikirim + ditulis ulang ke Sheet — tanpa batas, setiap sync jadi lebih lambat dari sebelumnya.
+  state.auditLog = trimAuditLog(state.auditLog, AUDIT_LIMIT);
+}
 
 function setPage(next, push = true) {
   if (!next || next === currentPage) return;
@@ -847,6 +854,24 @@ async function loadStateFromGoogleSheet(appsScriptUrl) {
 }
 
 async function syncToGoogleSheet() {
+  // Klik berulang saat request pertama masih berjalan dulu membuat beberapa POST berat berjalan
+  // paralel ke Apps Script. Itu bukan mempercepat — Google justru mengantrikannya. Semua pemanggil
+  // sekarang berbagi Promise yang sama sampai sync aktif selesai.
+  if (syncInFlight) {
+    showToast("Sinkronisasi masih berjalan…");
+    return syncInFlight;
+  }
+
+  syncInFlight = performGoogleSheetSync();
+  try {
+    return await syncInFlight;
+  } finally {
+    syncInFlight = null;
+    renderSyncButtons();
+  }
+}
+
+async function performGoogleSheetSync() {
   const { appsScriptUrl, sheetUrl } = state.settings;
   if (!sheetUrl || !appsScriptUrl) {
     applySetupGateIfNeeded();
@@ -866,7 +891,9 @@ async function syncToGoogleSheet() {
       }
     }
     const params = new URLSearchParams();
-    params.set("payload", JSON.stringify({ action: "sync", sheetUrl, payload: state }));
+    // Payload disusun oleh syncPayload() (murni, dites terpisah): membuang status lokal yang
+    // berubah di sekitar sync dan membatasi panjang jejak aktivitas. Lihat src/utils.js.
+    params.set("payload", JSON.stringify(syncPayload(state)));
     const r = await fetch(appsScriptUrl, { method: "POST", body: params });
     const text = await r.text();
     let data = {};
@@ -878,7 +905,7 @@ async function syncToGoogleSheet() {
       return;
     }
     setSyncVisual("success");
-    showToast("Sinkron Google Sheet berhasil");
+    showToast(syncResultMessage(data));
     addAudit("sync_google_sheet", "success");
     state.settings.lastSyncedAt = new Date().toISOString();
     state.settings.hasPendingSync = false;
@@ -890,6 +917,21 @@ async function syncToGoogleSheet() {
   }
 }
 
+/**
+ * Pesan hasil sync.
+ *
+ * Apps Script versi baru menjawab dengan daftar `ditulis` dan `dilewati`, jadi kelihatan bahwa
+ * sync hanya menyentuh tabel yang isinya benar-benar berubah. Dengan Apps Script versi lama
+ * jawabannya tidak memuat daftar itu, dan pesannya kembali sederhana.
+ */
+function syncResultMessage(data) {
+  const ditulis = Array.isArray(data && data.ditulis) ? data.ditulis : null;
+  if (!ditulis) return "Sinkron Google Sheet berhasil";
+  const jumlahDilewati = Array.isArray(data.dilewati) ? data.dilewati.length : 0;
+  if (!ditulis.length) return "Sudah selaras — tidak ada tabel yang perlu ditulis";
+  return `Tersinkron — ${ditulis.length} tabel diperbarui${jumlahDilewati ? `, ${jumlahDilewati} tidak berubah` : ""}`;
+}
+
 function renderSyncButtons() {
   const buttons = [document.getElementById("syncNowBtnTop"), document.getElementById("syncNowBtnFab")];
   const iconName = syncVisualStatus === "loading" ? "spinner" : (syncVisualStatus === "success" ? "check" : (syncVisualStatus === "error" ? "x" : "sync"));
@@ -898,6 +940,9 @@ function renderSyncButtons() {
     if (!btn) return;
     btn.className = `${btn.id === "syncNowBtnFab" ? "sync-fab-btn " : ""}sync-top-btn sync-btn sync-${syncVisualStatus}`;
     btn.innerHTML = `<span class="sync-icon">${icon(iconName)}</span>${showWarningBadge ? '<span class="sync-badge" aria-hidden="true">!</span>' : ""}`;
+    // Cegah klik ganda saat sync aktif. Kelas loading saja tidak memblokir event click.
+    btn.disabled = syncVisualStatus === "loading";
+    btn.setAttribute("aria-busy", String(syncVisualStatus === "loading"));
   });
 }
 

@@ -1,7 +1,7 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, inPeriod, sumInPeriod, normalizePeriodKey } from "../src/utils.js";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, inPeriod, sumInPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog } from "../src/utils.js";
 
 test("validateSheetUrl only accepts Google Sheets URL", () => {
   assert.equal(validateSheetUrl("https://docs.google.com/spreadsheets/d/abc123/edit"), true);
@@ -122,6 +122,99 @@ test("inPeriod tolerates timestamps and rejects malformed dates", () => {
   assert.equal(inPeriod({ date: "" }, bounds), false);
   assert.equal(inPeriod({}, bounds), false);
   assert.equal(inPeriod({ date: "11/09/2026" }, bounds), false);
+});
+
+test("syncPayload: membuang status lokal yang berubah di sekitar sync", () => {
+  // hasPendingSync dan lastSyncedAt berubah TEPAT di sekitar proses sync. Kalau ikut dikirim,
+  // sheet "settings" selalu terlihat berubah setiap sync dan selalu ditulis ulang padahal isinya
+  // sama — satu tabel yang seharusnya bisa dilewati jadi ikut ditulis terus.
+  const state = {
+    settings: {
+      sheetUrl: "https://docs.google.com/spreadsheets/d/abc/edit",
+      appsScriptUrl: "https://script.google.com/macros/s/x/exec",
+      hasPendingSync: true,
+      lastSyncedAt: "2026-09-21T12:00:00.000Z",
+      lastSourceChangeAt: "2026-08-01T00:00:00.000Z"
+    },
+    accounts: [], transactions: [], budgets: [], bills: [], goals: [], auditLog: []
+  };
+  const p = syncPayload(state);
+  assert.equal(p.action, "sync");
+  assert.equal(p.payload.settings.hasPendingSync, undefined, "status pending tidak boleh dikirim");
+  assert.equal(p.payload.settings.lastSyncedAt, undefined, "waktu sync terakhir tidak boleh dikirim");
+  assert.equal(p.payload.settings.sheetUrl, state.settings.sheetUrl, "konfigurasi asli tetap dikirim");
+  assert.equal(p.payload.settings.lastSourceChangeAt, state.settings.lastSourceChangeAt);
+});
+
+test("syncPayload: membatasi panjang jejak aktivitas", () => {
+  // Log ini bertambah 1 entri setiap sync dan seluruh isinya ikut dikirim + ditulis ulang.
+  // Tanpa batas, tiap sync lebih lambat dari sebelumnya — makin dipakai makin berat.
+  const banyak = Array.from({ length: 900 }, (_, i) => ({ id: `a${i}`, action: "sync_google_sheet" }));
+  const p = syncPayload({ settings: {}, auditLog: banyak });
+  assert.equal(p.payload.auditLog.length, AUDIT_LIMIT);
+  assert.equal(p.payload.auditLog[0].id, "a0", "yang dipertahankan adalah entri terbaru");
+
+  const sedikit = [{ id: "x" }];
+  assert.equal(syncPayload({ settings: {}, auditLog: sedikit }).payload.auditLog.length, 1);
+  assert.deepEqual(syncPayload({ settings: {} }).payload.auditLog, [], "tanpa log tetap aman");
+});
+
+test("syncPayload: bentuk payload tetap sama seperti yang dibaca Apps Script", () => {
+  // Apps Script membaca payload.transactions / bills / auditLog dst. Kalau nama field berubah,
+  // sync akan jalan tanpa error tapi tidak menulis apa pun.
+  const state = {
+    settings: { sheetUrl: "u" }, profile: { name: "Owner" }, categories: ["Makan"],
+    accounts: [{ id: "a" }], transactions: [{ id: "t" }], budgets: [{ id: "b" }],
+    bills: [{ id: "d" }], goals: [{ id: "g" }], auditLog: []
+  };
+  const p = syncPayload(state);
+  for (const key of ["accounts", "transactions", "budgets", "bills", "goals", "auditLog", "settings"]) {
+    assert.ok(Object.hasOwn(p.payload, key), `payload.${key} harus ada`);
+  }
+  assert.equal(p.payload.transactions[0].id, "t");
+  assert.equal(p.payload.bills[0].id, "d", "tagihan dikirim sebagai `bills`, Sheet-nya bernama debts");
+});
+
+test("trimAuditLog tahan terhadap nilai aneh", () => {
+  assert.deepEqual(trimAuditLog(null), []);
+  assert.deepEqual(trimAuditLog(undefined), []);
+  assert.deepEqual(trimAuditLog("bukan array"), []);
+  assert.deepEqual(trimAuditLog([1, 2, 3], 2), [1, 2]);
+  assert.deepEqual(trimAuditLog([1, 2], 5), [1, 2]);
+});
+
+test("klik sync berulang tidak membuat beberapa POST paralel", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(app, /let syncInFlight = null/, "harus ada penyimpan Promise sync aktif");
+  assert.match(app, /if \(syncInFlight\)/, "pemanggilan kedua harus memakai sync yang sedang berjalan");
+  assert.match(app, /syncInFlight = performGoogleSheetSync\(\)/, "hanya fungsi inti yang membuat request baru");
+  assert.match(app, /syncInFlight = null/, "guard harus dibersihkan setelah selesai");
+  assert.match(app, /btn\.disabled = syncVisualStatus === "loading"/, "tombol harus nonaktif saat loading");
+  assert.match(app, /aria-busy/, "status loading harus terbaca aksesibilitas");
+});
+
+test("Apps Script melewati tabel yang tidak berubah, bukan menulis semuanya", async () => {
+  // Ini inti percepatan sync: ~35 panggilan SpreadsheetApp per sync turun jadi ~5-14 karena
+  // tabel yang isinya sama persis tidak disentuh lagi.
+  const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
+
+  // sidik jari isi tiap tabel
+  assert.match(gs, /function fingerprint\(/, "harus ada sidik jari isi tabel");
+  assert.match(gs, /Utilities\.computeDigest/, "pakai MD5 bawaan Apps Script");
+  assert.match(gs, /PropertiesService\.getScriptProperties\(\)/, "sidik jari disimpan di Script Properties");
+
+  // keputusan lewati/tulis
+  assert.match(gs, /dilewati\.push/, "harus ada jalur yang melewati tabel");
+  assert.match(gs, /tersimpan === cetak/, "melewati hanya kalau sidik jarinya sama");
+  assert.match(gs, /getLastRow\(\) === rows\.length \+ 1/, "jumlah baris tetap dicek sebagai jaring pengaman");
+
+  // semua sheet diambil sekali, bukan 7 kali getSheetByName
+  assert.match(gs, /function sheetMap\(/, "harus ada pengambilan sheet sekali jalan");
+  assert.match(gs, /ss\.getSheets\(\)/, "getSheets sekali, bukan getSheetByName berkali-kali");
+
+  // header tidak boleh berubah — Sheet yang sudah ada harus tetap terbaca
+  assert.match(gs, /transactions: \["id", "date", "type", "category", "amount", "accountId", "note"\]/);
+  assert.match(gs, /debts: \["id", "name", "amount", "dueDate", "paid"\]/);
 });
 
 test("versi aset sinkron antara index.html, impor modul, dan cache service worker", async () => {

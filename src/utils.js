@@ -88,6 +88,61 @@ export function txDate(tx) {
   return String(tx?.date || "").slice(0, 10);
 }
 
+/**
+ * Batas panjang jejak aktivitas lokal.
+ *
+ * Log ini bertambah satu entri SETIAP kali sync berhasil (addAudit dipanggil setelah sync), dan
+ * seluruh isinya ikut dikirim serta ditulis ulang ke Sheet. Tanpa batas, payload membesar terus
+ * (~105 byte per sync) sehingga sync berikutnya selalu lebih lambat daripada sebelumnya — makin
+ * sering dipakai makin berat. 200 entri sudah cukup untuk melihat aktivitas terbaru.
+ */
+export const AUDIT_LIMIT = 200;
+
+/** Potong jejak aktivitas ke `limit` entri terbaru. */
+export function trimAuditLog(log, limit = AUDIT_LIMIT) {
+  if (!Array.isArray(log)) return [];
+  return log.length > limit ? log.slice(0, limit) : log;
+}
+
+/**
+ * Bentuk payload yang dikirim ke Apps Script.
+ *
+ * Sengaja dipisah jadi fungsi murni supaya bisa dites: dua hal di sini langsung memengaruhi
+ * kecepatan sync.
+ *
+ *  1. `hasPendingSync` dan `lastSyncedAt` dibuang. Keduanya status LOKAL yang berubah tepat di
+ *     sekitar proses sync itu sendiri. Kalau ikut dikirim, sheet "settings" selalu terlihat
+ *     berubah setiap sync — padahal isinya sama — sehingga selalu ditulis ulang.
+ *  2. `auditLog` dipotong ke AUDIT_LIMIT entri terbaru, supaya payload tidak tumbuh tanpa batas.
+ *
+ * Sisanya dikirim apa adanya karena Apps Script membandingkan sidik jari isi tiap tabel dan
+ * melewati tabel yang tidak berubah.
+ */
+export function syncPayload(state, { auditLimit = AUDIT_LIMIT } = {}) {
+  const settings = state?.settings || {};
+  const pengaturan = {};
+  Object.keys(settings).forEach((key) => {
+    if (key === "hasPendingSync" || key === "lastSyncedAt") return;
+    pengaturan[key] = settings[key];
+  });
+
+  return {
+    action: "sync",
+    sheetUrl: settings.sheetUrl,
+    payload: {
+      profile: state?.profile,
+      accounts: state?.accounts || [],
+      categories: state?.categories || [],
+      transactions: state?.transactions || [],
+      budgets: state?.budgets || [],
+      bills: state?.bills || [],
+      goals: state?.goals || [],
+      settings: pengaturan,
+      auditLog: trimAuditLog(state?.auditLog, auditLimit)
+    }
+  };
+}
+
 export function inPeriod(tx, bounds) {
   const day = txDate(tx);
   if (!day || !bounds) return false;
