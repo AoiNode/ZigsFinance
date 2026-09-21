@@ -287,6 +287,28 @@ test("versi aset sinkron antara index.html, impor modul, dan cache service worke
   assert.match(sw, /zigs-fi-shell-v\d+/, "nama cache harus ber-versi supaya cache lama dibuang");
 });
 
+test("Pengaturan hanya menampilkan 5 jejak aktivitas terbaru tanpa pagination", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const settingsBody = app.match(/function renderSettings\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+
+  assert.match(settingsBody, /const recentAuditLog = state\.auditLog\.slice\(0, 5\)/,
+    "harus mengambil tepat lima entri pertama (auditLog tersusun terbaru dulu)");
+  assert.match(settingsBody, /recentAuditLog\.map/,
+    "baris yang dirender harus berasal dari lima entri terbaru");
+  assert.doesNotMatch(settingsBody, /paginate\(state\.auditLog/,
+    "Jejak aktivitas tidak boleh punya halaman lanjutan");
+  assert.doesNotMatch(settingsBody, /auditPage\.controls/,
+    "kontrol Sebelumnya/Berikutnya harus hilang dari kartu Jejak aktivitas");
+  assert.doesNotMatch(app, /auditLog: 1/,
+    "state pagination auditLog yang sudah tidak dipakai harus dihapus");
+
+  // Data sumber tetap lengkap; batas lima hanya untuk presentasi.
+  assert.doesNotMatch(settingsBody, /state\.auditLog\s*=/,
+    "renderSettings tidak boleh memotong data audit asli");
+  assert.match(settingsBody, /recentAuditLog\.length[^\n]*terbaru/,
+    "badge harus menjelaskan jumlah aktivitas terbaru yang benar-benar tampil");
+});
+
 test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () => {
   const tutorial = await readFile(new URL("../tutorial.html", import.meta.url), "utf8");
   const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
