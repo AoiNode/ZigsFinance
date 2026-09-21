@@ -1,4 +1,7 @@
-﻿import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod } from "./utils.js";
+﻿// Versi pada impor ini WAJIB ada dan ikut dinaikkan setiap kali utils.js berubah.
+// Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
+// utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey } from "./utils.js?v=1";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -66,11 +69,15 @@ let isSourceFormOpen = false;
 let setupRemoteHasData = false;
 
 function loadPeriodScope() {
-  const scope = { dashboard: "month", reports: "month" };
+  // Bawaan 30d — sebelum ini "month", dan 30 hari terakhir adalah padanan terdekatnya.
+  const scope = { dashboard: "30d", reports: "30d" };
   try {
     const raw = JSON.parse(localStorage.getItem(PERIOD_KEY) || "{}");
     Object.keys(scope).forEach((key) => {
-      if (PERIOD_MODES.some((option) => option.key === raw[key])) scope[key] = raw[key];
+      // normalizePeriodKey juga menerima kunci lama (day/week/month), jadi pilihan yang sudah
+      // tersimpan sebelum pembaruan ini tidak hilang.
+      const migrated = normalizePeriodKey(raw[key]);
+      if (migrated) scope[key] = migrated;
     });
   } catch (_) {}
   return scope;

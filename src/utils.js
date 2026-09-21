@@ -17,51 +17,71 @@ export function parseCsv(text) {
   });
 }
 
+/**
+ * Pilihan rentang waktu di dasbor dan laporan.
+ *
+ * Sengaja MEMUTAR (rolling): "7d" = 7 hari terakhir yang berakhir HARI INI, bukan Senin–Minggu
+ * pekan kalender.
+ *
+ * Kenapa diubah: dengan pekan kalender, membuka aplikasi hari Senin menampilkan "21–27 Sep" yang
+ * isinya 6 hari KE DEPAN. Ringkasannya hampir selalu nol di awal pekan (di server ini terukur
+ * "21–27 Sep 2026 · 0 transaksi" padahal ada transaksi beberapa hari sebelumnya), lalu angkanya
+ * melonjak tanpa hubungan dengan apa yang baru terjadi. Rentang memutar selalu berarti
+ * "N hari terakhir" kapan pun dibuka, jadi angkanya bisa dibandingkan antar hari.
+ */
 export const PERIOD_MODES = [
-  { key: "day", short: "Hari", label: "hari ini" },
-  { key: "week", short: "Minggu", label: "minggu ini" },
-  { key: "month", short: "Bulan", label: "bulan ini" }
+  { key: "1d", short: "1d", label: "hari ini", days: 1 },
+  { key: "7d", short: "7d", label: "7 hari terakhir", days: 7 },
+  { key: "30d", short: "30d", label: "30 hari terakhir", days: 30 }
 ];
 
+/**
+ * Pemetaan kunci lama -> baru, supaya pilihan yang sudah tersimpan di perangkat tidak hilang
+ * saat aplikasi diperbarui. Tanpa ini, pengguna yang memilih "bulan" akan diam-diam kembali ke
+ * setelan awal.
+ */
+export const LEGACY_PERIOD_KEYS = { day: "1d", week: "7d", month: "30d" };
+
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-const MONTHS_LONG = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+
+/** Kembalikan kunci yang sah (termasuk dari kunci lama), atau null kalau tidak dikenal. */
+export function normalizePeriodKey(key) {
+  if (PERIOD_MODES.some((option) => option.key === key)) return key;
+  const migrated = LEGACY_PERIOD_KEYS[key];
+  return PERIOD_MODES.some((option) => option.key === migrated) ? migrated : null;
+}
 
 export function periodMode(mode) {
-  return PERIOD_MODES.find((option) => option.key === mode) || PERIOD_MODES[2];
+  return PERIOD_MODES.find((option) => option.key === normalizePeriodKey(mode)) || PERIOD_MODES[2];
 }
 
 function isoDay(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-export function periodBounds(mode = "month", now = new Date()) {
+/**
+ * Batas rentang: `to` selalu HARI INI, `from` mundur (days - 1) hari.
+ * Jam diset 12 siang waktu lokal supaya pergeseran DST tidak menggeser tanggalnya.
+ */
+export function periodBounds(mode = "30d", now = new Date()) {
+  const days = periodMode(mode).days;
   const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (mode === "day") {
-    const day = isoDay(base);
-    return { from: day, to: day };
-  }
-  if (mode === "week") {
-    const from = new Date(base);
-    from.setDate(base.getDate() - ((base.getDay() + 6) % 7));
-    const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 6, 12);
-    to.setHours(0, 0, 0, 0);
-    return { from: isoDay(from), to: isoDay(to) };
-  }
-  const from = new Date(base.getFullYear(), base.getMonth(), 1);
-  const to = new Date(base.getFullYear(), base.getMonth() + 1, 0);
-  return { from: isoDay(from), to: isoDay(to) };
+  const start = new Date(base.getFullYear(), base.getMonth(), base.getDate() - (days - 1), 12);
+  return { from: isoDay(start), to: isoDay(base) };
 }
 
-export function periodRangeLabel(mode = "month", now = new Date()) {
+export function periodRangeLabel(mode = "30d", now = new Date()) {
   const { from, to } = periodBounds(mode, now);
   const start = new Date(`${from}T00:00:00`);
   const end = new Date(`${to}T00:00:00`);
-  if (mode === "day") return `${start.getDate()} ${MONTHS_SHORT[start.getMonth()]} ${start.getFullYear()}`;
-  if (mode === "week") {
-    const leading = start.getMonth() === end.getMonth() ? `${start.getDate()}` : `${start.getDate()} ${MONTHS_SHORT[start.getMonth()]}`;
-    return `${leading}–${end.getDate()} ${MONTHS_SHORT[end.getMonth()]} ${end.getFullYear()}`;
+  if (from === to) return `${start.getDate()} ${MONTHS_SHORT[start.getMonth()]} ${start.getFullYear()}`;
+  // Rentang yang melewati pergantian tahun ditulis lengkap, kalau tidak "31 Des–2 Jan 2027"
+  // terbaca seolah keduanya di 2027.
+  if (start.getFullYear() !== end.getFullYear()) {
+    return `${start.getDate()} ${MONTHS_SHORT[start.getMonth()]} ${start.getFullYear()}–${end.getDate()} ${MONTHS_SHORT[end.getMonth()]} ${end.getFullYear()}`;
   }
-  return `${MONTHS_LONG[start.getMonth()]} ${start.getFullYear()}`;
+  const leading = start.getMonth() === end.getMonth() ? `${start.getDate()}` : `${start.getDate()} ${MONTHS_SHORT[start.getMonth()]}`;
+  return `${leading}–${end.getDate()} ${MONTHS_SHORT[end.getMonth()]} ${end.getFullYear()}`;
 }
 
 export function txDate(tx) {

@@ -1,7 +1,7 @@
 ﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, inPeriod, sumInPeriod } from "../src/utils.js";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, inPeriod, sumInPeriod, normalizePeriodKey } from "../src/utils.js";
 
 test("validateSheetUrl only accepts Google Sheets URL", () => {
   assert.equal(validateSheetUrl("https://docs.google.com/spreadsheets/d/abc123/edit"), true);
@@ -17,33 +17,75 @@ test("parseCsv parses expected rows", () => {
 });
 
 const DAY = (y, m, d) => new Date(y, m - 1, d, 12);
+/** Jumlah hari dari a sampai b (b - a). */
+const jarakHari = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000);
 
-test("periodBounds uses local calendar days for harian, mingguan, bulanan", () => {
-  const friday = DAY(2026, 9, 11);
-  assert.deepEqual(periodBounds("day", friday), { from: "2026-09-11", to: "2026-09-11" });
-  assert.deepEqual(periodBounds("week", friday), { from: "2026-09-07", to: "2026-09-13" });
-  assert.deepEqual(periodBounds("month", friday), { from: "2026-09-01", to: "2026-09-30" });
+test("periodBounds memutar: rentang selalu berakhir HARI INI", () => {
+  const senin = DAY(2026, 9, 21);
+  assert.deepEqual(periodBounds("1d", senin), { from: "2026-09-21", to: "2026-09-21" });
+  assert.deepEqual(periodBounds("7d", senin), { from: "2026-09-15", to: "2026-09-21" });
+  assert.deepEqual(periodBounds("30d", senin), { from: "2026-08-23", to: "2026-09-21" });
 });
 
-test("week scope starts on Monday and can cross a month boundary", () => {
-  assert.deepEqual(periodBounds("week", DAY(2026, 9, 1)), { from: "2026-08-31", to: "2026-09-06" });
-  assert.deepEqual(periodBounds("week", DAY(2026, 9, 7)), { from: "2026-09-07", to: "2026-09-13" });
-  assert.equal(periodRangeLabel("week", DAY(2026, 9, 1)), "31 Agu\u20136 Sep 2026");
+test("BUG LAMA: hari Senin tidak lagi menarik pekan ke DEPAN", () => {
+  // Dulu "minggu" = Senin–Minggu pekan kalender. Hari Senin 21 Sep jadi menampilkan 21–27 Sep:
+  // enam hari yang belum terjadi, sehingga ringkasannya hampir selalu nol lalu melonjak.
+  const senin = DAY(2026, 9, 21);
+  const { from, to } = periodBounds("7d", senin);
+  assert.equal(to, "2026-09-21", "batas akhir harus hari ini, bukan Minggu pekan ini");
+  assert.ok(to <= "2026-09-21", "tidak boleh ada tanggal yang belum terjadi");
+  assert.equal(jarakHari(from, to), 6, "7 hari terakhir = mundur 6 hari dari hari ini");
 });
 
-test("month scope handles februari and leap years", () => {
-  assert.deepEqual(periodBounds("month", DAY(2028, 2, 10)), { from: "2028-02-01", to: "2028-02-29" });
-  assert.deepEqual(periodBounds("month", DAY(2027, 2, 10)), { from: "2027-02-01", to: "2027-02-28" });
+test("rentang memutar tidak terpengaruh hari apa hari ini", () => {
+  // Inti perbaikan ini: hasilnya sama panjangnya, hari apa pun. Dulu Senin dan Minggu memberi
+  // rentang yang berbeda jauh.
+  const hari = [21, 22, 23, 24, 25, 26, 27].map((d) => DAY(2026, 9, d));
+  const panjang = hari.map((h) => jarakHari(periodBounds("7d", h).from, periodBounds("7d", h).to));
+  assert.deepEqual(panjang, [6, 6, 6, 6, 6, 6, 6], "semua harus 7 hari");
+  hari.forEach((h) => {
+    const { to } = periodBounds("7d", h);
+    assert.equal(to, `${to.slice(0, 8)}${String(h.getDate()).padStart(2, "0")}`, "batas akhir = hari itu sendiri");
+  });
 });
 
-test("period labels are Indonesian, short, and human readable", () => {
-  const friday = DAY(2026, 9, 11);
-  assert.equal(periodRangeLabel("day", friday), "11 Sep 2026");
-  assert.equal(periodRangeLabel("week", friday), "7\u201313 Sep 2026");
-  assert.equal(periodRangeLabel("month", friday), "September 2026");
-  assert.equal(periodMode("week").label, "minggu ini");
-  assert.equal(periodMode("nonsense").label, "bulan ini");
+test("rentang memutar aman melewati batas bulan dan tahun", () => {
+  assert.deepEqual(periodBounds("7d", DAY(2026, 9, 1)), { from: "2026-08-26", to: "2026-09-01" });
+  assert.deepEqual(periodBounds("7d", DAY(2027, 1, 3)), { from: "2026-12-28", to: "2027-01-03" });
+  // 1 Maret di tahun kabisat: mundur 6 hari harus mendarat di 24 Februari
+  assert.deepEqual(periodBounds("7d", DAY(2028, 3, 1)), { from: "2028-02-24", to: "2028-03-01" });
+  // 1 Januari: 30 hari terakhir harus masuk ke Desember tahun sebelumnya
+  assert.deepEqual(periodBounds("30d", DAY(2027, 1, 1)), { from: "2026-12-03", to: "2027-01-01" });
+});
+
+test("label rentang terbaca manusia, termasuk saat melewati tahun", () => {
+  const jumat = DAY(2026, 9, 11);
+  assert.equal(periodRangeLabel("1d", jumat), "11 Sep 2026");
+  assert.equal(periodRangeLabel("7d", jumat), "5\u201311 Sep 2026");
+  assert.equal(periodRangeLabel("30d", jumat), "13 Agu\u201311 Sep 2026");
+  // rentang lintas tahun ditulis lengkap supaya tidak terbaca seolah keduanya di tahun yang sama
+  assert.equal(periodRangeLabel("7d", DAY(2027, 1, 3)), "28 Des 2026\u20133 Jan 2027");
+});
+
+test("nama pilihan periode: 1d / 7d / 30d", () => {
+  assert.deepEqual(PERIOD_MODES.map((m) => m.short), ["1d", "7d", "30d"]);
+  assert.deepEqual(PERIOD_MODES.map((m) => m.key), ["1d", "7d", "30d"]);
+  assert.deepEqual(PERIOD_MODES.map((m) => m.days), [1, 7, 30]);
+  assert.equal(periodMode("7d").label, "7 hari terakhir");
+  assert.equal(periodMode("1d").label, "hari ini");
   assert.equal(PERIOD_MODES.length, 3);
+});
+
+test("pilihan lama (day/week/month) ikut dipindahkan, bukan dibuang", () => {
+  // Tanpa ini, pengguna yang sudah memilih "bulan" akan diam-diam kembali ke setelan awal.
+  assert.equal(normalizePeriodKey("day"), "1d");
+  assert.equal(normalizePeriodKey("week"), "7d");
+  assert.equal(normalizePeriodKey("month"), "30d");
+  assert.equal(normalizePeriodKey("7d"), "7d", "kunci baru tetap diterima");
+  assert.equal(normalizePeriodKey("nonsense"), null);
+  assert.equal(normalizePeriodKey(undefined), null);
+  assert.equal(periodMode("month").key, "30d", "periodMode harus ikut memindahkan");
+  assert.equal(periodMode("nonsense").key, "30d", "nilai tidak dikenal jatuh ke bawaan 30d");
 });
 
 test("sumInPeriod scopes amounts without bleeding across year or period", () => {
@@ -55,18 +97,57 @@ test("sumInPeriod scopes amounts without bleeding across year or period", () => 
     { date: "2026-10-01", type: "expense", amount: 700000 }
   ];
   const friday = DAY(2026, 9, 11);
-  assert.equal(sumInPeriod(transactions, "expense", periodBounds("day", friday)), 50000);
-  assert.equal(sumInPeriod(transactions, "expense", periodBounds("week", friday)), 75000);
-  assert.equal(sumInPeriod(transactions, "expense", periodBounds("month", friday)), 75000);
-  assert.equal(sumInPeriod(transactions, "income", periodBounds("month", friday)), 200000);
+  assert.equal(sumInPeriod(transactions, "expense", periodBounds("1d", friday)), 50000);
+  assert.equal(sumInPeriod(transactions, "expense", periodBounds("7d", friday)), 75000);
+  assert.equal(sumInPeriod(transactions, "expense", periodBounds("30d", friday)), 75000);
+  assert.equal(sumInPeriod(transactions, "income", periodBounds("30d", friday)), 200000);
+});
+
+test("transaksi masa depan tidak ikut terhitung", () => {
+  // 30 hari terakhir berakhir hari ini, jadi transaksi bertanggal besok atau bulan depan tidak
+  // boleh masuk. Ini yang bikin ringkasan pekan kalender lama terasa aneh: rentangnya ke depan.
+  const transactions = [
+    { date: "2026-09-11", type: "expense", amount: 50000 },
+    { date: "2026-09-12", type: "expense", amount: 111000 },
+    { date: "2026-09-30", type: "expense", amount: 222000 },
+  ];
+  const friday = DAY(2026, 9, 11);
+  assert.equal(sumInPeriod(transactions, "expense", periodBounds("30d", friday)), 50000);
+  assert.equal(inPeriod({ date: "2026-09-12" }, periodBounds("30d", friday)), false);
 });
 
 test("inPeriod tolerates timestamps and rejects malformed dates", () => {
-  const bounds = periodBounds("month", DAY(2026, 9, 11));
+  const bounds = periodBounds("30d", DAY(2026, 9, 11));
   assert.equal(inPeriod({ date: "2026-09-11T08:30:00Z" }, bounds), true);
   assert.equal(inPeriod({ date: "" }, bounds), false);
   assert.equal(inPeriod({}, bounds), false);
   assert.equal(inPeriod({ date: "11/09/2026" }, bounds), false);
+});
+
+test("versi aset sinkron antara index.html, impor modul, dan cache service worker", async () => {
+  // Service worker proyek ini CACHE-FIRST dan berpatokan pada URL. Kalau sebuah modul diimpor
+  // tanpa versi (atau versinya tidak dinaikkan), perubahan di file itu tidak akan pernah sampai
+  // ke pengguna yang sudah memasang PWA-nya — mereka tetap menjalankan kode lama tanpa cara
+  // menyadarinya. Tes ini menjaga ketiganya tetap sinkron.
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const sw = await readFile(new URL("../sw.js", import.meta.url), "utf8");
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+
+  const versiHtml = [...html.matchAll(/(?:href|src)="\.\/([\w./-]+)\?v=(\d+)"/g)].map((m) => `./${m[1]}?v=${m[2]}`);
+  assert.ok(versiHtml.length >= 2, "index.html harus memakai versi aset");
+  for (const aset of versiHtml) {
+    assert.ok(sw.includes(aset), `sw.js SHELL harus memuat ${aset} (versi index.html dan sw.js tidak sinkron)`);
+  }
+
+  // Impor antar-modul juga wajib ber-versi
+  const impor = [...app.matchAll(/from\s+"\.\/([\w.-]+\.js)(\?v=\d+)?"/g)];
+  assert.ok(impor.length > 0, "app.js harus mengimpor modul lain");
+  for (const [, path, versi] of impor) {
+    assert.ok(versi, `impor ./${path} di app.js harus ber-versi (?v=) supaya tidak nyangkut di cache`);
+    assert.ok(sw.includes(`./src/${path}${versi}`), `sw.js SHELL harus memuat ./src/${path}${versi}`);
+  }
+
+  assert.match(sw, /zigs-fi-shell-v\d+/, "nama cache harus ber-versi supaya cache lama dibuang");
 });
 
 test("dashboard and reports both expose the period switch and its handler", async () => {
