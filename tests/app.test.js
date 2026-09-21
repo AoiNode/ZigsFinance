@@ -287,6 +287,32 @@ test("versi aset sinkron antara index.html, impor modul, dan cache service worke
   assert.match(sw, /zigs-fi-shell-v\d+/, "nama cache harus ber-versi supaya cache lama dibuang");
 });
 
+test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () => {
+  const tutorial = await readFile(new URL("../tutorial.html", import.meta.url), "utf8");
+  const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
+
+  assert.match(tutorial, /width=device-width,initial-scale=1,viewport-fit=cover/);
+  assert.match(tutorial, /env\(safe-area-inset-bottom\)/);
+  assert.match(tutorial, /@media\(max-width:480px\)/);
+
+  // Setiap lapisan pembungkus blok kode harus boleh menyusut di viewport HP.
+  assert.match(tutorial, /\.guide-shell\{[^}]*width:min\(1080px,100%\)[^}]*overflow:hidden/);
+  assert.match(tutorial, /\.guide-grid\{[^}]*min-width:0/);
+  assert.match(tutorial, /\.step\{[^}]*min-width:0[^}]*overflow:hidden/);
+  assert.match(tutorial, /\.code-wrap\{[^}]*min-width:0[^}]*max-width:100%/);
+  assert.match(tutorial, /pre\{[^}]*width:100%[^}]*max-width:100%[^}]*overflow:auto/);
+
+  // Daftar isi menjadi chip horizontal di HP, bukan sidebar yang menyempitkan konten.
+  assert.match(tutorial, /\.toc-links\{display:flex[^}]*overflow-x:auto/);
+
+  // Kode di tutorial harus berasal dari file backend terbaru, bukan salinan lama dalam HTML.
+  assert.match(tutorial, /apps-script\/Code\.gs\?v=5/);
+  assert.match(gs, /function fingerprint\(/, "Code.gs harus versi sync cepat");
+  assert.match(gs, /dilewati\.push/, "Code.gs harus melewati tabel yang tidak berubah");
+  assert.match(tutorial, /sync hanya menulis tabel yang berubah/);
+  assert.match(tutorial, /ISI_SPREADSHEET_ID/, "ID tetap placeholder untuk pengguna tutorial");
+});
+
 test("dashboard and reports both expose the period switch and its handler", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   assert.match(app, /periodSwitch\("dashboard"\)/);
