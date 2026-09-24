@@ -389,6 +389,13 @@ test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () 
   assert.match(gs, /function fingerprint\(/, "Code.gs harus versi sync cepat");
   assert.match(gs, /dilewati\.push/, "Code.gs harus melewati tabel yang tidak berubah");
   assert.match(tutorial, /sync hanya menulis tabel yang berubah/);
+  // Deskripsi tutorial harus ikut kode terbaru (v7): outbox, pull bertahap, cadangan.
+  assert.match(gs, /function applyMutations\(/, "Code.gs harus punya mutasi inkremental idempoten");
+  assert.match(gs, /action === "load-page"/, "Code.gs harus mendukung tarik data bertahap");
+  assert.match(tutorial, /outbox yang idempotent/);
+  assert.match(tutorial, /500–1000 baris per halaman/);
+  assert.match(tutorial, /cadangan otomatis seluruh histori/);
+  assert.match(tutorial, /memverifikasi jumlah baris sebelum menimpa/);
   assert.match(tutorial, /ISI_SPREADSHEET_ID/, "ID tetap placeholder untuk pengguna tutorial");
 });
 

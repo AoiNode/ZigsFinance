@@ -149,9 +149,9 @@
 
         <section class="step" id="script">
           <div class="step-head"><span class="step-number">2</span><div><h2>Buka Apps Script dan tempel kode terbaru</h2><ol><li>Di spreadsheet, pilih <strong>Extensions → Apps Script</strong>.</li><li>Hapus seluruh isi file <strong>Code.gs</strong>.</li><li>Tekan tombol <strong>Salin kode</strong> di bawah, lalu tempel semuanya.</li><li>Tekan <strong>Ctrl + S</strong> atau klik ikon Save.</li></ol></div></div>
-          <div class="callout fast"><strong>Versi terbaru:</strong> sync hanya menulis tabel yang berubah, membatasi audit log, dan melewati tabel yang isinya sama. Ini menggantikan script lama yang selalu menulis ulang ketujuh tab.</div>
+          <div class="callout fast"><strong>Versi terbaru (v7):</strong> sync hanya menulis tabel yang berubah, membatasi audit log, dan melewati tabel yang isinya sama. Baru: pengiriman inkremental lewat <strong>outbox yang idempotent</strong> (aman diulang saat koneksi putus), <strong>Tarik data</strong> bertahap 500–1000 baris per halaman dengan verifikasi jumlah total, dan cadangan otomatis seluruh histori sebelum data lokal ditimpa.</div>
           <div class="code-wrap">
-            <div class="code-bar"><span>Code.gs — versi sinkron cepat</span><button class="copy-btn" id="copyCode" type="button">Salin kode</button></div>
+            <div class="code-bar"><span>Code.gs — versi inkremental &amp; tarik data bertahap (v7)</span><button class="copy-btn" id="copyCode" type="button">Salin kode</button></div>
             <pre id="scriptCode" tabindex="0" aria-label="Kode Apps Script">Memuat kode terbaru…</pre>
           </div>
           <div id="copyStatus" class="copy-status" role="status" aria-live="polite"></div>
@@ -169,7 +169,7 @@
 
         <section class="step" id="connect">
           <div class="step-head"><span class="step-number">5</span><div><h2>Hubungkan ke Zigs.fi</h2><ol><li>Kembali ke halaman setup Zigs.fi.</li><li>Tempel URL Google Spreadsheet lengkap pada kolom pertama.</li><li>Tempel URL Web App <strong>/exec</strong> pada kolom kedua.</li><li>Klik <strong>Uji Koneksi</strong>.</li><li>Jika statusnya valid, klik <strong>Simpan & Lanjut</strong>.</li></ol></div></div>
-          <div class="checklist"><div class="check"><span>✓</span><span>Sheet dapat digunakan terus-menerus tanpa batas periode.</span></div><div class="check"><span>✓</span><span>Data lokal disalin ke Sheet saat tombol sinkron ditekan.</span></div><div class="check"><span>✓</span><span>Setelah sync pertama, tabel yang tidak berubah akan dilewati agar lebih cepat.</span></div></div>
+          <div class="checklist"><div class="check"><span>✓</span><span>Sheet dapat digunakan terus-menerus tanpa batas periode.</span></div><div class="check"><span>✓</span><span>Data lokal disalin ke Sheet saat tombol sinkron ditekan.</span></div><div class="check"><span>✓</span><span>Setelah sync pertama, tabel yang tidak berubah akan dilewati agar lebih cepat.</span></div><div class="check"><span>✓</span><span>Tarik data membuat cadangan seluruh histori dulu, lalu memverifikasi jumlah baris sebelum menimpa data lokal.</span></div></div>
         </section>
 
         <section class="step" id="update">
