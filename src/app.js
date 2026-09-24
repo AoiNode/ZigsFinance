@@ -747,7 +747,10 @@ function renderSettings() {
   const sourceForm = isSourceFormOpen ? `<form id="sourceForm" class="card source-form collapsible-form"><div class="card-title-row"><div><span class="section-kicker">Koneksi penyimpanan</span><h3>Edit sumber data</h3></div><button class="icon-btn" type="button" data-toggle-source-form="1" aria-label="Tutup">${icon("x")}</button></div><label>Link Google Sheet<input name="sheetUrl" value="${escapeHtml(s.sheetUrl)}" placeholder="https://docs.google.com/spreadsheets/d/..." required></label><label>URL Apps Script<input name="appsScriptUrl" value="${escapeHtml(s.appsScriptUrl)}" placeholder="https://script.google.com/macros/s/.../exec" required></label><label>Alasan perubahan <small>(opsional)</small><input name="reason" placeholder="Contoh: mengganti spreadsheet"></label><div id="sourceFormStatus" class="source-form-status" role="status" aria-live="polite"></div><div class="source-form-actions"><button id="saveSourceBtn" class="btn" type="submit">Simpan & Validasi</button><button class="btn ghost" type="button" data-toggle-source-form="1">Batal</button></div></form>` : "";
   const historyRows = historyPage.items.map(h => `<div class="setting-log-row"><span class="setting-log-icon">${icon("sync")}</span><div><strong>Sumber diperbarui</strong><small>${new Date(h.at).toLocaleString("id-ID")}</small><p>${escapeHtml(h.reason || "Tanpa alasan")}</p></div></div>`).join("");
   const auditRows = recentAuditLog.map(l => `<div class="setting-log-row"><span class="setting-log-dot"></span><div><strong>${escapeHtml(l.action)}</strong><small>${new Date(l.at).toLocaleString("id-ID")}</small><p>${escapeHtml(l.detail || "Tanpa detail")}</p></div></div>`).join("");
-  setContent(`<div class="settings-premium"><section class="settings-source-card card"><div class="settings-source-icon">${icon("report")}</div><div class="settings-source-copy"><span class="section-kicker">Penyimpanan utama</span><h3>Google Spreadsheet</h3><p>${activeSheetId ? `ID aktif: <code>${escapeHtml(compactId(activeSheetId))}</code>` : "Sumber data belum dipilih."}</p><small class="active-source-endpoint">Apps Script: ${s.appsScriptUrl ? escapeHtml(compactId(s.appsScriptUrl, 34, 8)) : "belum diisi"}</small></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber"}</button></section>${sourceForm}<section class="card settings-status-card"><div class="card-title-row"><div><span class="section-kicker">Koneksi</span><h3>Status sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><div class="settings-status-time"><span>Sinkron terakhir</span><strong>${lastSyncedLabel}</strong></div><p>${s.hasPendingSync ? "Ada perubahan lokal yang menunggu dikirim ke Google Sheet." : "Data lokal dan Google Sheet sudah selaras."}</p></section><section class="card settings-history-card"><div class="card-title-row"><div><span class="section-kicker">Perubahan koneksi</span><h3>Riwayat sumber</h3></div><span class="count-chip">${s.sourceHistory.length}</span></div><div class="setting-log-list">${historyRows || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}</div>${historyPage.controls}</section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Aktivitas aplikasi</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${recentAuditLog.length ? `${recentAuditLog.length} terbaru` : "0"}</span></div><div class="setting-log-list">${auditRows || emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}</div></section></div>`);
+  setContent(`<div class="settings-premium"><section class="settings-source-card card"><div class="settings-source-icon">${icon("report")}</div><div class="settings-source-copy"><span class="section-kicker">Penyimpanan utama</span><h3>Google Spreadsheet</h3><p>${activeSheetId ? `ID aktif: <code>${escapeHtml(compactId(activeSheetId))}</code>` : "Sumber data belum dipilih."}</p><small class="active-source-endpoint">Apps Script: ${s.appsScriptUrl ? escapeHtml(compactId(s.appsScriptUrl, 34, 8)) : "belum diisi"}</small></div><button class="btn edit-source-btn" type="button" data-toggle-source-form="1">${isSourceFormOpen ? icon("x") : icon("edit")} ${isSourceFormOpen ? "Tutup" : "Edit sumber"}</button></section>${sourceForm}<section class="card settings-status-card"><div class="card-title-row"><div><span class="section-kicker">Koneksi</span><h3>Status sinkron</h3></div><span class="bill-status ${s.hasPendingSync ? "soon" : "paid"}">${s.hasPendingSync ? "Belum sinkron" : "Tersinkron"}</span></div><div class="settings-status-time"><span>Sinkron terakhir</span><strong>${lastSyncedLabel}</strong></div><p>${s.hasPendingSync ? "Ada perubahan lokal yang menunggu dikirim ke Google Sheet." : "Data lokal sudah dikirim ke Google Sheet."}</p><div class="source-form-actions"><button id="pullDataBtn" class="btn ghost" type="button" ${s.appsScriptUrl ? "" : "disabled"}>Tarik data ke perangkat ini</button><small>Gunakan saat pindah perangkat. Data lokal akan diganti, bukan digabung.</small></div></section><section class="card settings-history-card"><div class="card-title-row"><div><span class="section-kicker">Perubahan koneksi</span><h3>Riwayat sumber</h3></div><span class="count-chip">${s.sourceHistory.length}</span></div><div class="setting-log-list">${historyRows || emptyState("Belum ada pergantian", "Riwayat perubahan sumber akan muncul di sini.")}</div>${historyPage.controls}</section><section class="card settings-audit-card"><div class="card-title-row"><div><span class="section-kicker">Aktivitas aplikasi</span><h3>Jejak aktivitas</h3></div><span class="count-chip">${recentAuditLog.length ? `${recentAuditLog.length} terbaru` : "0"}</span></div><div class="setting-log-list">${auditRows || emptyState("Belum ada aktivitas", "Aktivitas terbaru akan tercatat otomatis.")}</div></section></div>`);
+  const pullDataBtn = document.getElementById("pullDataBtn");
+  if (pullDataBtn) pullDataBtn.onclick = pullDataFromGoogleSheet;
+
   const form = document.getElementById("sourceForm");
   if (!form) return;
   form.onsubmit = async (e) => {
@@ -915,9 +918,53 @@ async function saveDataSourceFromForm(formData) {
   return { ok: true, remoteHasData: validation.remoteHasData, changed: sourceChanged };
 }
 
+async function pullDataFromGoogleSheet() {
+  const pull = document.getElementById("pullDataBtn");
+  if (!pull || !state.settings.appsScriptUrl) return;
+
+  const first = await showConfirmDialog({
+    title: "Konfirmasi 1 dari 2",
+    message: "Tarik data dari Google Sheet ke perangkat ini? Data lokal saat ini akan diganti, bukan digabung.",
+    confirmText: "Lanjut",
+    danger: true
+  });
+  if (!first) return;
+
+  const second = await showConfirmDialog({
+    title: "Konfirmasi 2 dari 2",
+    message: "Yakin lanjut? Cadangan data lokal akan diunduh, lalu seluruh data perangkat ini ditimpa oleh data dari Google Sheet.",
+    confirmText: "Ya, tarik & timpa",
+    danger: true
+  });
+  if (!second) return;
+
+  const originalLabel = pull.textContent;
+  pull.disabled = true;
+  pull.setAttribute("aria-busy", "true");
+  pull.textContent = "Menarik data…";
+  download(`backup-before-pull-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state, null, 2), "application/json");
+
+  try {
+    const result = await loadStateFromGoogleSheet(state.settings.appsScriptUrl);
+    if (!result.ok) {
+      showToast(`Gagal menarik data: ${result.message}`);
+      return;
+    }
+    showToast("Data Google Sheet berhasil ditarik ke perangkat ini");
+    render();
+  } finally {
+    // Bila render belum terjadi (misalnya request gagal), pulihkan tombol yang sama.
+    if (pull.isConnected) {
+      pull.disabled = false;
+      pull.removeAttribute("aria-busy");
+      pull.textContent = originalLabel;
+    }
+  }
+}
+
 async function loadStateFromGoogleSheet(appsScriptUrl) {
   try {
-    const response = await fetch(`${appsScriptUrl}?action=load&ts=${Date.now()}`, { cache: "no-store" });
+    const response = await fetchWithTimeout(`${appsScriptUrl}?action=load&ts=${Date.now()}`, { cache: "no-store" }, SYNC_TIMEOUT_MS);
     const data = await response.json();
     if (!response.ok || !data.ok || !data.payload) throw new Error(data.message || "Data Spreadsheet gagal dimuat.");
     const sourceSettings = { ...state.settings };
@@ -1026,17 +1073,8 @@ async function performGoogleSheetSync() {
   }
   setSyncVisual("loading");
   try {
-    const localIsEmpty = state.transactions.length === 0 && state.budgets.length === 0 && state.bills.length === 0 && state.goals.length === 0;
-    if (localIsEmpty) {
-      const probeResponse = await fetchWithTimeout(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" }, 20000);
-      const probe = await probeResponse.json();
-      if (!probeResponse.ok || probe.ok === false) throw new Error(probe.message || "Pemeriksaan Spreadsheet gagal.");
-      if (probe.remoteHasData) {
-        setSyncVisual("error");
-        showToast("REMOTE_DATA_EXISTS: Spreadsheet sudah berisi data. Pulihkan dari Spreadsheet terlebih dahulu.");
-        return;
-      }
-    }
+    // Tombol Sync sengaja satu arah: hanya mengirim state lokal ke Google Sheet.
+    // Membaca/menimpa data lokal adalah tindakan terpisah melalui tombol Tarik Data di Pengaturan.
     const params = new URLSearchParams();
     // Payload disusun oleh syncPayload() (murni, dites terpisah): membuang status lokal yang
     // berubah di sekitar sync dan membatasi panjang jejak aktivitas. Lihat src/utils.js.

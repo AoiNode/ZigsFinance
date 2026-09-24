@@ -227,6 +227,32 @@ test("perubahan URL Apps Script saja tetap dianggap pergantian sumber", async ()
   assert.match(app, /newAppsScriptUrl/);
 });
 
+test("Sync hanya mengirim data lokal ke Google Sheet tanpa membaca remote", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const syncBody = app.match(/async function performGoogleSheetSync\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+
+  assert.match(syncBody, /syncPayload\(state\)/, "Sync harus tetap mengirim state lokal");
+  assert.match(syncBody, /postSyncWithRetry\(/, "Sync harus POST ke Apps Script");
+  assert.doesNotMatch(syncBody, /action=ping|remoteHasData|loadStateFromGoogleSheet/,
+    "tombol Sync tidak boleh membaca atau menarik data remote");
+});
+
+test("Pengaturan menyediakan Tarik Data dengan dua konfirmasi sebelum overwrite lokal", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+
+  assert.match(app, /id="pullDataBtn"/);
+  assert.match(app, /async function pullDataFromGoogleSheet\(\)/);
+  const pullBody = app.match(/async function pullDataFromGoogleSheet\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(pullBody, /Konfirmasi 1 dari 2/);
+  assert.match(pullBody, /Konfirmasi 2 dari 2/);
+  assert.equal((pullBody.match(/await showConfirmDialog\(/g) || []).length, 2,
+    "harus ada tepat dua popup konfirmasi berurutan");
+  assert.match(pullBody, /await loadStateFromGoogleSheet\(state\.settings\.appsScriptUrl\)/);
+  assert.match(pullBody, /pull\.disabled = true/);
+  assert.match(pullBody, /pull\.textContent = "Menarik data…"/);
+  assert.match(pullBody, /pull\.disabled = false/);
+});
+
 test("sync mencoba ulang gangguan sementara sebelum menjadi merah", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
 

@@ -16,8 +16,9 @@ test("new device setup restores before allowing Spreadsheet writes", async () =>
   assert.match(source, /remoteHasData/);
 });
 
-test("empty local state cannot overwrite a populated remote Spreadsheet without confirmation", async () => {
+test("manual Sync tetap satu arah meski data lokal kosong", async () => {
   const source = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
-  assert.match(source, /REMOTE_DATA_EXISTS/);
-  assert.match(source, /Spreadsheet sudah berisi data/);
+  const syncBody = source.match(/async function performGoogleSheetSync\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(syncBody, /action=ping|remoteHasData|loadStateFromGoogleSheet/);
+  assert.match(syncBody, /postSyncWithRetry/);
 });
