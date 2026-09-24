@@ -189,7 +189,7 @@
     const output=document.getElementById('scriptCode');
     const copyButton=document.getElementById('copyCode');
     const copyStatus=document.getElementById('copyStatus');
-    fetch('./apps-script/Code.gs?v=6',{cache:'no-store'})
+    fetch('./apps-script/Code.gs?v=7',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.text()})
       .then(t=>{
         output.textContent=t.replace(/const SPREADSHEET_ID\s*=\s*"[^"]*";/,'const SPREADSHEET_ID = "ISI_SPREADSHEET_ID";');

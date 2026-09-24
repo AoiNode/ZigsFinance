@@ -49,15 +49,30 @@ const SHEET_SPECS = {
 };
 
 const HASH_PREFIX = "zigsfi_hash_";
+const MUTATION_LOG_SHEET = "_zigsfi_mutations";
 
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
-  if (action === "ping" || action === "load") {
+  if (action === "ping" || action === "load" || action === "load-meta" || action === "load-page") {
     try {
       var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       var sheets = sheetMap(ss);
       if (action === "load") return json({ ok: true, payload: loadState(ss, sheets) });
-      return json({ ok: true, message: "connected", remoteHasData: remoteHasData(sheets) });
+      if (action === "load-meta") {
+        var txSheet = sheets.transactions;
+        var totalTransactions = txSheet ? Math.max(0, txSheet.getLastRow() - 1) : 0;
+        return json({ ok: true, totalTransactions: totalTransactions, payload: {
+          accounts: readSheetObjects(ss, "accounts", sheets),
+          transactions: [],
+          budgets: readSheetObjects(ss, "budgets", sheets),
+          goals: readSheetObjects(ss, "goals", sheets),
+          bills: readSheetObjects(ss, "debts", sheets),
+          settings: readSettings(ss, sheets),
+          auditLog: readSheetObjects(ss, "audit_log", sheets)
+        }});
+      }
+      if (action === "load-page") return json(loadPage(sheets, e.parameter || {}));
+      return json({ ok: true, message: "connected", remoteHasData: remoteHasData(sheets), capabilities: ["mutations-v1", "paged-load-v1"] });
     } catch (err) {
       return json({ ok: false, message: err.message });
     }
@@ -74,6 +89,9 @@ function doPost(e) {
       return json({ ok: false, retryable: true, message: "Sinkronisasi lain masih berjalan. Mencoba lagi." });
     }
     var body = parseBody(e);
+    if (body.action === "mutate") {
+      return json(applyMutations(SpreadsheetApp.openById(SPREADSHEET_ID), body.mutations || [], body.payload || {}));
+    }
     if (body.action !== "sync") throw new Error("unsupported action");
 
     var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -139,6 +157,100 @@ function doPost(e) {
   } finally {
     if (lock.hasLock()) lock.releaseLock();
   }
+}
+
+function applyMutations(ss, mutations, payload) {
+  if (!Array.isArray(mutations) || mutations.length > 500) throw new Error("invalid mutations batch");
+  var sheets = sheetMap(ss);
+  var sh = sheets.transactions;
+  if (!sh) {
+    sh = ss.insertSheet("transactions");
+    sh.getRange(1, 1, 1, SHEET_SPECS.transactions.length).setValues([SHEET_SPECS.transactions]);
+  }
+  var log = sheets[MUTATION_LOG_SHEET] || ss.insertSheet(MUTATION_LOG_SHEET);
+  if (log.getLastRow() === 0) log.getRange(1, 1, 1, 2).setValues([["mutationId", "appliedAt"]]);
+  try { log.hideSheet(); } catch (_) {}
+  var seen = {};
+  if (log.getLastRow() > 1) log.getRange(2, 1, log.getLastRow() - 1, 1).getValues().forEach(function(r) { seen[String(r[0])] = true; });
+  var ids = {};
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function(r, i) { ids[String(r[0])] = i + 2; });
+  var appliedMutationIds = [];
+  var logRows = [];
+  mutations.forEach(function(m) {
+    if (!m || m.entity !== "transactions" || !m.mutationId || !m.id || (m.op !== "upsert" && m.op !== "delete")) throw new Error("invalid mutation");
+    if (seen[m.mutationId]) { appliedMutationIds.push(m.mutationId); return; }
+    var rowNumber = ids[String(m.id)];
+    if (m.op === "delete") {
+      if (rowNumber) {
+        sh.deleteRow(rowNumber);
+        Object.keys(ids).forEach(function(id) { if (ids[id] > rowNumber) ids[id]--; });
+        delete ids[String(m.id)];
+      }
+    } else {
+      var record = m.record || {};
+      var values = SHEET_SPECS.transactions.map(function(key) { return record[key] == null ? "" : record[key]; });
+      if (rowNumber) sh.getRange(rowNumber, 1, 1, values.length).setValues([values]);
+      else {
+        rowNumber = sh.getLastRow() + 1;
+        sh.getRange(rowNumber, 1, 1, values.length).setValues([values]);
+        ids[String(m.id)] = rowNumber;
+      }
+    }
+    seen[m.mutationId] = true;
+    appliedMutationIds.push(m.mutationId);
+    logRows.push([m.mutationId, new Date().toISOString()]);
+  });
+  if (logRows.length) log.getRange(log.getLastRow() + 1, 1, logRows.length, 2).setValues(logRows);
+  /* Retensi jurnal mutation ID dibatasi ~5.000 entri terakhir (Improvement 3 review):
+     retry yang datang JAUH lebih lambat dari itu (lintasan ribuan mutasi) bisa terlepas dari
+     dedup. Aman karena op-nya idempotent — upsert menulis nilai sama, delete baris sudah
+     tiada — jadi retry paling-paling menulis ulang hasil identik, tidak pernah menggandakan. */
+  if (log.getLastRow() > 5001) log.deleteRows(2, log.getLastRow() - 5001);
+  PropertiesService.getScriptProperties().deleteProperty(HASH_PREFIX + "transactions");
+  writeAuxiliarySheets(ss, payload || {});
+  return { ok: true, appliedMutationIds: appliedMutationIds, syncedAt: new Date().toISOString() };
+}
+
+function writeAuxiliarySheets(ss, payload) {
+  var sheets = sheetMap(ss);
+  var jobs = [
+    ["accounts", payload.accounts || []], ["budgets", payload.budgets || []],
+    ["goals", payload.goals || []], ["debts", payload.bills || []],
+    ["settings", flattenSettings(payload.settings || {})], ["audit_log", payload.auditLog || []]
+  ];
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperties();
+  var changed = {};
+  jobs.forEach(function(item) {
+    var name = item[0], rows = item[1], header = SHEET_SPECS[name], sh = sheets[name];
+    var nextHash = fingerprint(header, rows);
+    if (sh && stored[HASH_PREFIX + name] === nextHash && sh.getLastRow() === rows.length + 1) return;
+    if (!sh) sh = ss.insertSheet(name);
+    writeSheet(sh, header, rows);
+    changed[HASH_PREFIX + name] = nextHash;
+  });
+  if (Object.keys(changed).length) props.setProperties(changed);
+}
+
+function loadPage(sheets, params) {
+  var table = String(params.table || "transactions");
+  if (table !== "transactions") throw new Error("unsupported paged table");
+  var limit = Math.min(1000, Math.max(1, Number(params.limit) || 500));
+  var offset = Math.max(0, Number(params.cursor) || 0);
+  var sh = sheets[table];
+  var total = sh ? Math.max(0, sh.getLastRow() - 1) : 0;
+  var count = Math.min(limit, Math.max(0, total - offset));
+  var rows = [];
+  if (count > 0) {
+    var values = sh.getRange(offset + 2, 1, count, SHEET_SPECS.transactions.length).getValues();
+    rows = values.map(function(row) {
+      var obj = {};
+      SHEET_SPECS.transactions.forEach(function(key, i) { obj[key] = row[i]; });
+      return obj;
+    });
+  }
+  var next = offset + count;
+  return { ok: true, table: table, rows: rows, nextCursor: next < total ? String(next) : null, done: next >= total, total: total };
 }
 
 /* Ambil semua sheet sekali jalan. Versi lama memanggil getSheetByName 7 kali untuk

@@ -222,7 +222,7 @@ test("perubahan URL Apps Script saja tetap dianggap pergantian sumber", async ()
   assert.match(app, /const sheetChanged = oldSheet !== next/);
   assert.match(app, /const scriptChanged = oldScript !== appsScriptUrl/);
   assert.match(app, /const sourceChanged = sheetChanged \|\| scriptChanged/);
-  assert.match(app, /if \(sourceChanged\) state\.settings\.hasPendingSync = true/);
+  assert.match(app, /if \(sourceChanged\) \{[\s\S]*state\.settings\.hasPendingSync = true/);
   assert.match(app, /oldAppsScriptUrl/);
   assert.match(app, /newAppsScriptUrl/);
 });
@@ -231,7 +231,7 @@ test("Sync hanya mengirim data lokal ke Google Sheet tanpa membaca remote", asyn
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   const syncBody = app.match(/async function performGoogleSheetSync\(\) \{[\s\S]*?\n\}/)?.[0] || "";
 
-  assert.match(syncBody, /syncPayload\(state\)/, "Sync harus tetap mengirim state lokal");
+  assert.match(syncBody, /syncPayload\(/, "Sync harus tetap mengirim state lokal");
   assert.match(syncBody, /postSyncWithRetry\(/, "Sync harus POST ke Apps Script");
   assert.doesNotMatch(syncBody, /action=ping|remoteHasData|loadStateFromGoogleSheet/,
     "tombol Sync tidak boleh membaca atau menarik data remote");
@@ -385,7 +385,7 @@ test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () 
   assert.match(tutorial, /\.toc-links\{display:flex[^}]*overflow-x:auto/);
 
   // Kode di tutorial harus berasal dari file backend terbaru, bukan salinan lama dalam HTML.
-  assert.match(tutorial, /apps-script\/Code\.gs\?v=6/);
+  assert.match(tutorial, /apps-script\/Code\.gs\?v=7/);
   assert.match(gs, /function fingerprint\(/, "Code.gs harus versi sync cepat");
   assert.match(gs, /dilewati\.push/, "Code.gs harus melewati tabel yang tidak berubah");
   assert.match(tutorial, /sync hanya menulis tabel yang berubah/);
@@ -401,5 +401,28 @@ test("dashboard and reports both expose the period switch and its handler", asyn
   assert.match(app, /finance_os_period_scope/);
   const sw = await readFile(new URL("../sw.js", import.meta.url), "utf8");
   assert.match(sw, /zigs-fi-shell-v\d+/);
+});
+
+test("Improvement 5: badge jumlah transaksi memakai total IndexedDB, bukan page cache", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(app, /\$\{total\} transaksi · 10 per halaman/, "footer daftar memakai total IndexedDB");
+  // Badge "Total keseluruhan" di laporan memakai summary hasil kursor IDB saat DB aktif.
+  assert.match(app, /const allCount = allSummary \? allSummary\.count : state\.transactions\.length;/);
+});
+
+test("Blocker 2: kegagalan persist terlihat oleh pengguna dan call site menunggu mutasi", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const add = app.match(/async function addTransaction\(tx\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(add, /await persistTransactionMutation\("upsert", tx\)/);
+  assert.match(add, /if \(!saved\.ok\)/, "addTransaction wajib memberi tahu bila gagal simpan");
+  const edit = app.match(/async function updateTransaction\(nextTx\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(edit, /await persistTransactionMutation\("upsert", nextTx\)/);
+  const del = app.match(/async function deleteTransaction\(txId\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(del, /await persistTransactionMutation\("delete"/);
+  const undo = app.match(/async function undoDeleteTransaction\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(undo, /await persistTransactionMutation\("upsert", tx\)/);
+  assert.match(app, /if \(!ok\) return;\s*\n\s*await addTransaction\(tx\);/, "submit form menunggu persist");
+  assert.match(app, /if \(!ok\) return;\s*\n\s*await updateTransaction\(txNext\);/, "dialog edit menunggu persist");
+  assert.match(app, /await addTransaction\(\{ date, type, category, amount, note, accountId: account\.id \}\);/, "impor CSV menunggu persist per baris");
 });
 

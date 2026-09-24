@@ -2,6 +2,7 @@
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
 import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=3";
+import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=1";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -62,6 +63,7 @@ const PAGE_SIZE = 10;
 const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1 };
 const dashboardHiddenSeries = new Set();
 const PERIOD_KEY = "finance_os_period_scope";
+const PENDING_MUTATIONS_KEY = "finance_os_pending_mutations";
 let periodScope = loadPeriodScope();
 let pendingDeletedTx = null;
 let pendingDeleteTimer = null;
@@ -69,6 +71,90 @@ let quickTxType = "";
 let isBillFormOpen = false;
 let isSourceFormOpen = false;
 let setupRemoteHasData = false;
+let financeDb = null;
+let financeDbReady = false;
+let persistenceQueue = Promise.resolve();
+let transactionTotal = 0;
+
+function enqueuePersistence(work) {
+  const task = persistenceQueue.catch(() => {}).then(async () => {
+    try {
+      await work();
+      return { ok: true };
+    } catch (error) {
+      financeDbReady = false;
+      console.error("Penyimpanan IndexedDB gagal; jurnal lokal akan diputar ulang saat aplikasi dibuka.", error);
+      return { ok: false, error };
+    }
+  });
+  persistenceQueue = task;
+  return task;
+}
+
+async function initializeDataStore() {
+  if (!globalThis.indexedDB) return;
+  const legacyTransactions = Array.isArray(state.transactions) ? [...state.transactions] : [];
+  financeDb = await openFinanceDb();
+  if (state.storage?.engine !== "indexeddb") {
+    const migration = await migrateLegacyTransactions(financeDb, legacyTransactions);
+    if (!migration.safeToStripLocalTransactions) throw new Error("Migrasi data lokal belum terverifikasi");
+    if (state.settings.hasPendingSync) state.settings.incrementalBootstrapPending = true;
+  }
+  const pending = JSON.parse(localStorage.getItem(PENDING_MUTATIONS_KEY) || "[]");
+  for (const mutation of Array.isArray(pending) ? pending : []) await queueMutation(financeDb, mutation);
+  localStorage.removeItem(PENDING_MUTATIONS_KEY);
+  const recent = await getTransactionPage(financeDb, 0, 50);
+  state.transactions = recent.rows;
+  transactionTotal = recent.total;
+  financeDbReady = true;
+  saveState(false);
+}
+
+function readPendingMutationJournal() {
+  try {
+    const list = JSON.parse(localStorage.getItem(PENDING_MUTATIONS_KEY) || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch (_) { return []; }
+}
+
+function writePendingMutationJournal(mutation) {
+  const pending = readPendingMutationJournal();
+  pending.push(mutation);
+  try {
+    localStorage.setItem(PENDING_MUTATIONS_KEY, JSON.stringify(pending));
+    return true;
+  } catch (_) {
+    // Kuota localStorage penuh: kompres data non-kritis lalu coba satu kali lagi.
+    state.auditLog = (state.auditLog || []).slice(0, 10);
+    state.settings.sourceHistory = (state.settings.sourceHistory || []).slice(0, 10);
+    try {
+      localStorage.setItem(PENDING_MUTATIONS_KEY, JSON.stringify(pending));
+      return true;
+    } catch (_) { return false; }
+  }
+}
+
+function removePendingMutationJournal(mutationId) {
+  try {
+    const remaining = readPendingMutationJournal().filter(item => item.mutationId !== mutationId);
+    if (remaining.length) localStorage.setItem(PENDING_MUTATIONS_KEY, JSON.stringify(remaining));
+    else localStorage.removeItem(PENDING_MUTATIONS_KEY);
+  } catch (_) {}
+}
+
+async function persistTransactionMutation(op, record) {
+  if (!financeDb) return { ok: true };
+  const mutation = buildMutation("transactions", op, record);
+  // WAL didahulukan: kalau browser mati tepat di tengah commit IndexedDB, mutasi tetap
+  // diputar ulang saat aplikasi dibuka berikutnya.
+  const walOk = writePendingMutationJournal(mutation);
+  const result = await enqueuePersistence(async () => {
+    await queueMutation(financeDb, mutation);
+    removePendingMutationJournal(mutation.mutationId);
+  });
+  if (result.ok && !walOk) console.warn("Jurnal darurat lokal penuh; perubahan tetap tersimpan di IndexedDB.");
+  return result;
+}
 
 function loadPeriodScope() {
   // Bawaan 30d — sebelum ini "month", dan 30 hari terakhir adalah padanan terdekatnya.
@@ -107,7 +193,7 @@ function periodSwitch(kind) {
 
 init();
 
-function init() {
+async function init() {
   try {
     renderNav();
     renderBottomNav();
@@ -115,9 +201,16 @@ function init() {
     initRupiahInputs();
     applySidebarState();
     applySetupGateIfNeeded();
+    renderPageLoading();
+    await initializeDataStore();
     render();
   } catch (err) {
-    renderFatalError(err);
+    // Jika IndexedDB tidak tersedia/gagal, jangan membuang data lama. Tetap jalankan aplikasi
+    // dari localStorage dan pertahankan transaksi di sana sebagai fallback.
+    financeDbReady = false;
+    console.error(err);
+    render();
+    showToast("Mode kompatibilitas aktif — data lokal lama tetap aman");
   }
 }
 
@@ -163,7 +256,21 @@ function normalizeState(raw) {
 }
 function saveState(markDirty = true) {
   if (markDirty) state.settings.hasPendingSync = true;
-  localStorage.setItem(DB_KEY, JSON.stringify(state));
+  // Setelah migrasi terverifikasi, histori transaksi tinggal di IndexedDB. localStorage hanya
+  // menyimpan state kecil agar tidak mentok quota. Jika IDB gagal, fallback tetap menyimpan penuh.
+  const snapshot = () => financeDbReady
+    ? { ...state, transactions: [], storage: { engine: "indexeddb", version: 1, transactionCount: transactionTotal } }
+    : state;
+  try {
+    localStorage.setItem(DB_KEY, JSON.stringify(snapshot()));
+  } catch (_) {
+    // Kuota penuh: kompres log non-kritis lalu coba sekali lagi. saveState tidak boleh
+    // melempar error ke handler UI — data transaksi sudah di IndexedDB atau jurnal WAL.
+    state.auditLog = (state.auditLog || []).slice(0, 10);
+    state.settings.sourceHistory = (state.settings.sourceHistory || []).slice(0, 10);
+    try { localStorage.setItem(DB_KEY, JSON.stringify(snapshot())); }
+    catch (error) { console.error("localStorage penuh; metadata gagal ditimpan.", error); }
+  }
   renderSyncButtons();
 }
 function id() {
@@ -268,7 +375,9 @@ function bindGlobal() {
 
     const txDelete = e.target.closest("[data-tx-delete]")?.dataset.txDelete;
     if (txDelete) {
-      deleteTransaction(txDelete);
+      // Fire-and-forget dari handler klik; persist di dalamnya tidak melempar error,
+      // catch ini hanya pengaman agar tak ada rejection tak tertangani di konsol.
+      deleteTransaction(txDelete).catch(err => console.error("Penghapusan transaksi gagal:", err));
       return;
     }
     const txEdit = e.target.closest("[data-tx-edit]")?.dataset.txEdit;
@@ -389,7 +498,7 @@ function renderAlerts() {
   host.innerHTML = `<details class="alert-summary ${overdue.length ? "danger" : "warning"}"><summary><span class="alert-symbol">!</span><span class="alert-copy"><strong>${title}</strong><small>Terdekat: ${escapeHtml(nearest.name)} · ${nearestLabel}</small></span><span class="alert-open-label">Lihat</span></summary><div class="alert-detail">${rows}<button class="text-btn" type="button" data-go-page="bills">Kelola semua tagihan →</button></div></details>`;
 }
 
-function render() {
+async function render() {
   renderAlerts();
   document.getElementById("pageTitle").textContent = NAV.find(n => n[0] === currentPage)?.[1] || "";
   document.querySelectorAll("#nav button[data-page]").forEach((btn) => btn.classList.toggle("active", btn.dataset.page === currentPage));
@@ -407,20 +516,21 @@ function render() {
     return;
   }
   try {
-    ({ dashboard: renderDashboard, accounts: renderAccounts, transactions: renderTransactions, budgets: renderBudgets, bills: renderBills, goals: renderGoals, reports: renderReports, settings: renderSettings })[currentPage]();
+    await ({ dashboard: renderDashboard, accounts: renderAccounts, transactions: renderTransactions, budgets: renderBudgets, bills: renderBills, goals: renderGoals, reports: renderReports, settings: renderSettings })[currentPage]();
   } catch (err) {
     renderPageError(err);
   }
 }
 
-function renderDashboard() {
+async function renderDashboard() {
   const scope = periodScope.dashboard;
   const bounds = periodBounds(scope);
   const periodLabel = periodMode(scope).label;
   const rangeLabel = periodRangeLabel(scope);
-  const monthlyIncome = sumInPeriod(state.transactions, "income", bounds);
-  const monthlyExpense = sumInPeriod(state.transactions, "expense", bounds);
-  const periodCount = state.transactions.filter((tx) => inPeriod(tx, bounds)).length;
+  const summary = financeDbReady ? await summaryFromDb(financeDb, bounds) : null;
+  const monthlyIncome = summary ? summary.income : sumInPeriod(state.transactions, "income", bounds);
+  const monthlyExpense = summary ? summary.expense : sumInPeriod(state.transactions, "expense", bounds);
+  const periodCount = summary ? summary.count : state.transactions.filter((tx) => inPeriod(tx, bounds)).length;
   const monthlyCashflow = monthlyIncome - monthlyExpense;
   const netWorth = state.accounts.reduce((a, b) => a + Number(b.balance), 0);
   const savingRate = monthlyIncome > 0 ? ((monthlyIncome - monthlyExpense) / monthlyIncome) * 100 : 0;
@@ -492,10 +602,28 @@ function renderAccounts() {
   };
 }
 
-function renderTransactions() {
-  const { items: visibleRows, controls } = paginate(state.transactions, "transactions");
+async function renderTransactions() {
+  let visibleRows;
+  let total;
+  let controls = "";
+  if (financeDbReady) {
+    const page = Math.max(1, Number(listPages.transactions || 1));
+    const result = await getTransactionPage(financeDb, (page - 1) * PAGE_SIZE, PAGE_SIZE);
+    visibleRows = result.rows;
+    total = result.total;
+    transactionTotal = total;
+    state.transactions = visibleRows;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    listPages.transactions = Math.min(page, totalPages);
+    if (totalPages > 1) controls = `<nav class="pagination" aria-label="Navigasi daftar"><button class="btn ghost" type="button" data-list-page="transactions" data-page="${Math.max(1, page - 1)}" ${page <= 1 ? "disabled" : ""}>← Sebelumnya</button><span>Halaman ${page} dari ${totalPages}</span><button class="btn ghost" type="button" data-list-page="transactions" data-page="${Math.min(totalPages, page + 1)}" ${page >= totalPages ? "disabled" : ""}>Berikutnya →</button></nav>`;
+  } else {
+    const result = paginate(state.transactions, "transactions");
+    visibleRows = result.items;
+    controls = result.controls;
+    total = state.transactions.length;
+  }
   const rows = visibleRows.map(t => `<tr><td>${t.date}</td><td>${t.type === "income" ? "Pemasukan" : "Pengeluaran"}</td><td>${t.category}</td><td>${fmt(t.amount)}</td><td><button data-tx-edit="${t.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button><button data-tx-delete="${t.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></td></tr>`).join("");
-  const history = state.transactions.length === 0 ? emptyState("Belum ada transaksi", "Transaksi yang kamu input akan tampil di sini.") : `<div class="table-wrap"><table><thead><tr><th>Tgl</th><th>Tipe</th><th>Kategori</th><th>Nominal</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table></div><div class="list-foot"><small>${state.transactions.length} transaksi · 10 per halaman</small>${controls}</div>`;
+  const history = total === 0 ? emptyState("Belum ada transaksi", "Transaksi yang kamu input akan tampil di sini.") : `<div class="table-wrap"><table><thead><tr><th>Tgl</th><th>Tipe</th><th>Kategori</th><th>Nominal</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table></div><div class="list-foot"><small>${total} transaksi · 10 per halaman</small>${controls}</div>`;
   setContent(`<section class="transaction-layout"><form id="txForm" class="card tx-entry-card"><div class="tx-card-head"><div><span class="section-kicker">Catat aktivitas</span><h3>Transaksi baru</h3></div><span class="wallet-chip">Dompet Utama</span></div><input type="hidden" name="id" value=""><div class="type-switch"><label><input type="radio" name="type" value="expense" checked><span>− Pengeluaran</span></label><label><input type="radio" name="type" value="income"><span>+ Pemasukan</span></label></div><label class="amount-field"><span>Nominal</span><div><b>Rp</b><input name="amount" type="number" inputmode="numeric" placeholder="0" required></div></label><div class="tx-fields"><label>Tanggal<input name="date" type="date" value="${today()}" required></label><label>Kategori<input name="category" list="cats" placeholder="Pilih atau ketik kategori" required></label></div><datalist id="cats">${state.categories.map(c => `<option value="${c}">`).join("")}</datalist><label>Catatan <small>(opsional)</small><textarea name="note" rows="2" placeholder="Tambahkan keterangan singkat"></textarea></label><div class="tx-actions"><button class="btn tx-save">Simpan transaksi</button><button id="cancelTxBtn" class="btn ghost" type="button">Reset</button></div></form><aside class="card import-card"><div class="tx-card-head"><div><span class="section-kicker">Banyak data?</span><h3>Impor transaksi</h3></div><span class="file-badge">CSV</span></div><p>Masukkan transaksi sekaligus menggunakan file spreadsheet.</p><label class="file-drop" for="csvInput"><strong>Pilih file CSV</strong><small>Ketuk untuk mencari file di perangkat</small></label><input id="csvInput" class="visually-hidden" type="file" accept=".csv"><div class="import-actions"><button id="importBtn" class="btn" type="button">Impor sekarang</button><button id="downloadCsvTemplateBtn" class="btn ghost" type="button">Unduh template</button></div><small>Format lama dengan kolom akun tetap didukung.</small></aside></section><section class="card tx-history-card"><div class="tx-card-head"><div><span class="section-kicker">Aktivitas terakhir</span><h3>Riwayat transaksi</h3></div><span class="count-chip">${state.transactions.length} transaksi</span></div>${history}</section>`);
 
   const txForm = document.getElementById("txForm");
@@ -516,7 +644,7 @@ function renderTransactions() {
       danger: false
     });
     if (!ok) return;
-    addTransaction(tx);
+    await addTransaction(tx);
     e.target.reset();
     e.target.elements.date.value = today();
     render();
@@ -534,27 +662,41 @@ function renderTransactions() {
   document.getElementById("downloadCsvTemplateBtn").onclick = downloadCsvTemplate;
 }
 
-function addTransaction(tx) {
+async function addTransaction(tx) {
   tx.id = tx.id || id();
   state.transactions.unshift(tx);
   adjustAccountBalance(tx.accountId, tx.type === "income" ? tx.amount : -tx.amount);
   if (!state.categories.includes(tx.category)) state.categories.push(tx.category);
   addAudit("add_transaction", `${tx.type} ${tx.amount}`);
+  const saved = await persistTransactionMutation("upsert", tx);
   saveState();
+  if (!saved.ok) {
+    showToast("Transaksi belum tersimpan di perangkat — coba lagi");
+    render();
+    return false;
+  }
   showToast("Transaksi ditambahkan");
+  return true;
 }
 
-function updateTransaction(nextTx) {
+async function updateTransaction(nextTx) {
   const idx = state.transactions.findIndex(t => t.id === nextTx.id);
-  if (idx < 0) return;
+  if (idx < 0) return false;
   const prev = state.transactions[idx];
   adjustAccountBalance(prev.accountId, prev.type === "income" ? -prev.amount : prev.amount);
   adjustAccountBalance(nextTx.accountId, nextTx.type === "income" ? nextTx.amount : -nextTx.amount);
   state.transactions[idx] = nextTx;
   if (!state.categories.includes(nextTx.category)) state.categories.push(nextTx.category);
   addAudit("edit_transaction", `${nextTx.type} ${nextTx.amount}`);
+  const saved = await persistTransactionMutation("upsert", nextTx);
   saveState();
+  if (!saved.ok) {
+    showToast("Perubahan belum tersimpan di perangkat — coba lagi");
+    render();
+    return false;
+  }
   showToast("Transaksi diperbarui");
+  return true;
 }
 
 async function deleteTransaction(txId) {
@@ -572,24 +714,36 @@ async function deleteTransaction(txId) {
   pendingDeletedTx = null;
   adjustAccountBalance(tx.accountId, tx.type === "income" ? -tx.amount : tx.amount);
   state.transactions.splice(idx, 1);
+  const saved = await persistTransactionMutation("delete", { id: tx.id });
   addAudit("delete_transaction", `${tx.type} ${tx.amount}`);
   saveState();
+  if (!saved.ok) {
+    showToast("Penghapusan belum tersimpan di perangkat — coba lagi");
+    render();
+    return;
+  }
   pendingDeletedTx = { tx, index: idx };
   showActionToast("Transaksi dihapus", "Urungkan", undoDeleteTransaction, 5000);
   pendingDeleteTimer = window.setTimeout(() => { pendingDeletedTx = null; }, 5200);
   render();
 }
 
-function undoDeleteTransaction() {
+async function undoDeleteTransaction() {
   if (!pendingDeletedTx) return;
   const { tx, index } = pendingDeletedTx;
   const nextIndex = Math.max(0, Math.min(index, state.transactions.length));
   state.transactions.splice(nextIndex, 0, tx);
   adjustAccountBalance(tx.accountId, tx.type === "income" ? tx.amount : -tx.amount);
   addAudit("undo_delete_transaction", `${tx.type} ${tx.amount}`);
+  const saved = await persistTransactionMutation("upsert", tx);
   saveState();
   pendingDeletedTx = null;
   if (pendingDeleteTimer) window.clearTimeout(pendingDeleteTimer);
+  if (!saved.ok) {
+    showToast("Pemulihan belum tersimpan di perangkat — coba lagi");
+    render();
+    return;
+  }
   showToast("Penghapusan dibatalkan");
   render();
 }
@@ -629,7 +783,7 @@ async function importCsv() {
     if (v === "expense" || v === "pengeluaran") return "expense";
     return "";
   };
-  rows.forEach(r => {
+  for (const r of rows) {
     const date = pick(r, ["date", "tanggal"]);
     const type = toType(pick(r, ["type", "tipe"]));
     const category = pick(r, ["category", "kategori"]);
@@ -638,11 +792,11 @@ async function importCsv() {
     const accountName = pick(r, ["account", "akun"]);
     const note = pick(r, ["note", "catatan"]);
     const account = state.accounts.find(a => a.name === accountName) || state.accounts[0];
-    if (!date || !type || !category || !Number.isFinite(amount) || amount <= 0) return;
+    if (!date || !type || !category || !Number.isFinite(amount) || amount <= 0) continue;
     const duplicate = state.transactions.some(t => t.date === date && t.type === type && t.amount === amount && t.category === category);
-    if (duplicate) return;
-    addTransaction({ date, type, category, amount, note, accountId: account.id });
-  });
+    if (duplicate) continue;
+    await addTransaction({ date, type, category, amount, note, accountId: account.id });
+  }
   addAudit("import_csv", f.name);
   saveState();
   showToast("Impor CSV selesai");
@@ -661,9 +815,15 @@ function downloadCsvTemplate() {
   showToast("Template CSV diunduh");
 }
 
-function renderBudgets() {
+async function renderBudgets() {
   const budgetPage = paginate(state.budgets, "budgets");
-  setContent(`<div class="grid grid-2"><form id="budgetForm" class="card"><h3>Tambah / Ubah Anggaran</h3><input type="hidden" name="id"><label>Bulan<input name="month" type="month" required></label><label>Kategori<input name="category" required></label><label>Batas<input name="limit" type="number" required></label><button class="btn">Simpan</button></form><div class="card"><h3>Daftar Anggaran</h3>${budgetPage.controls}${budgetPage.items.map(b => { const spent = state.transactions.filter(t => t.type === "expense" && t.category === b.category && t.date.startsWith(b.month)).reduce((a, t) => a + t.amount, 0); const p = b.limit > 0 ? Math.min(100, (spent / b.limit) * 100) : 0; return `<div><p>${b.month} - ${b.category}: ${fmt(spent)}/${fmt(b.limit)} <button data-edit="budgets:${b.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button> <button data-delete="budgets:${b.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></p><div class="progress"><span style="width:${p}%"></span></div></div>`; }).join("") || emptyState("Belum ada anggaran", "Buat anggaran agar batas belanja bisa dipantau.")}</div></div>`);
+  const monthlySummaries = {};
+  if (financeDbReady) {
+    for (const month of [...new Set(budgetPage.items.map(b => b.month).filter(Boolean))]) {
+      monthlySummaries[month] = await summaryFromDb(financeDb, { from: `${month}-01`, to: `${month}-31` });
+    }
+  }
+  setContent(`<div class="grid grid-2"><form id="budgetForm" class="card"><h3>Tambah / Ubah Anggaran</h3><input type="hidden" name="id"><label>Bulan<input name="month" type="month" required></label><label>Kategori<input name="category" required></label><label>Batas<input name="limit" type="number" required></label><button class="btn">Simpan</button></form><div class="card"><h3>Daftar Anggaran</h3>${budgetPage.controls}${budgetPage.items.map(b => { const spent = financeDbReady ? Number(monthlySummaries[b.month]?.byCategory?.[b.category] || 0) : state.transactions.filter(t => t.type === "expense" && t.category === b.category && t.date.startsWith(b.month)).reduce((a, t) => a + t.amount, 0); const p = b.limit > 0 ? Math.min(100, (spent / b.limit) * 100) : 0; return `<div><p>${b.month} - ${b.category}: ${fmt(spent)}/${fmt(b.limit)} <button data-edit="budgets:${b.id}" title="Ubah" aria-label="Ubah">${icon("edit")}</button> <button data-delete="budgets:${b.id}" title="Hapus" aria-label="Hapus">${icon("trash")}</button></p><div class="progress"><span style="width:${p}%"></span></div></div>`; }).join("") || emptyState("Belum ada anggaran", "Buat anggaran agar batas belanja bisa dipantau.")}</div></div>`);
   document.getElementById("budgetForm").onsubmit = (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -713,25 +873,33 @@ function renderGoals() {
   };
 }
 
-function renderReports() {
+async function renderReports() {
   const scope = periodScope.reports;
   const bounds = periodBounds(scope);
   const periodLabel = periodMode(scope).label;
   const rangeLabel = periodRangeLabel(scope);
-  const periodTransactions = state.transactions.filter(t => inPeriod(t, bounds));
-  const byCategory = {};
-  periodTransactions.filter(t => t.type === "expense").forEach(t => byCategory[t.category] = (byCategory[t.category] || 0) + Number(t.amount || 0));
+  const periodSummary = financeDbReady ? await summaryFromDb(financeDb, bounds) : null;
+  const allSummary = financeDbReady ? await summaryFromDb(financeDb, { from: "0000-01-01", to: "9999-12-31" }) : null;
+  const periodTransactions = periodSummary ? [] : state.transactions.filter(t => inPeriod(t, bounds));
+  const byCategory = periodSummary ? periodSummary.byCategory : {};
+  if (!periodSummary) periodTransactions.filter(t => t.type === "expense").forEach(t => byCategory[t.category] = (byCategory[t.category] || 0) + Number(t.amount || 0));
   const rows = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
-  const periodIncome = sumInPeriod(state.transactions, "income", bounds);
-  const periodExpense = sumInPeriod(state.transactions, "expense", bounds);
-  const totalIncome = sumTx("income");
-  const totalExpense = sumTx("expense");
+  const periodIncome = periodSummary ? periodSummary.income : sumInPeriod(state.transactions, "income", bounds);
+  const periodExpense = periodSummary ? periodSummary.expense : sumInPeriod(state.transactions, "expense", bounds);
+  const totalIncome = allSummary ? allSummary.income : sumTx("income");
+  const totalExpense = allSummary ? allSummary.expense : sumTx("expense");
+  const reportCount = periodSummary ? periodSummary.count : periodTransactions.length;
+  const allCount = allSummary ? allSummary.count : state.transactions.length;
   const categoryTable = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Kategori</th><th>Total</th><th>Porsi</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r[0])}</td><td>${fmt(r[1])}</td><td>${periodExpense > 0 ? Math.round((r[1] / periodExpense) * 100) : 0}%</td></tr>`).join("")}</tbody></table></div>` : emptyState("Belum ada data laporan", `Tidak ada pengeluaran pada ${periodLabel}. Coba pilih periode lain.`);
-  setContent(`<div class="period-bar report-period"><span class="period-range">${rangeLabel} · ${periodTransactions.length} transaksi</span>${periodSwitch("reports")}</div><div class="metrics report-metrics">${metric(`Pemasukan ${periodLabel}`, fmt(periodIncome))}${metric(`Pengeluaran ${periodLabel}`, fmt(periodExpense))}</div><div class="card report-alltime-card"><div class="card-title-row"><div><span class="section-kicker">Sepanjang waktu</span><h3>Total keseluruhan</h3></div><span class="count-chip">${state.transactions.length} transaksi</span></div><div class="report-totals"><div><small>Pemasukan</small><strong class="masuk">${fmt(totalIncome)}</strong></div><div><small>Pengeluaran</small><strong class="keluar">${fmt(totalExpense)}</strong></div><div><small>Selisih</small><strong>${fmt(totalIncome - totalExpense)}</strong></div></div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">${rangeLabel}</span><h3>Pengeluaran teratas per kategori</h3></div></div>${categoryTable}</div><div class="card"><h3>Ekspor / Cadangan</h3><p><small>Ekspor selalu memuat seluruh transaksi, tidak ikut terfilter oleh pilihan periode.</small></p><button id="exportJson" class="btn">Ekspor JSON</button><button id="exportCsv" class="btn">Ekspor CSV</button></div>`);
-  document.getElementById("exportJson").onclick = () => download("backup-finance.json", JSON.stringify(state, null, 2), "application/json");
-  document.getElementById("exportCsv").onclick = () => {
+  setContent(`<div class="period-bar report-period"><span class="period-range">${rangeLabel} · ${reportCount} transaksi</span>${periodSwitch("reports")}</div><div class="metrics report-metrics">${metric(`Pemasukan ${periodLabel}`, fmt(periodIncome))}${metric(`Pengeluaran ${periodLabel}`, fmt(periodExpense))}</div><div class="card report-alltime-card"><div class="card-title-row"><div><span class="section-kicker">Sepanjang waktu</span><h3>Total keseluruhan</h3></div><span class="count-chip">${allCount} transaksi</span></div><div class="report-totals"><div><small>Pemasukan</small><strong class="masuk">${fmt(totalIncome)}</strong></div><div><small>Pengeluaran</small><strong class="keluar">${fmt(totalExpense)}</strong></div><div><small>Selisih</small><strong>${fmt(totalIncome - totalExpense)}</strong></div></div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">${rangeLabel}</span><h3>Pengeluaran teratas per kategori</h3></div></div>${categoryTable}</div><div class="card"><h3>Ekspor / Cadangan</h3><p><small>Ekspor selalu memuat seluruh transaksi, tidak ikut terfilter oleh pilihan periode.</small></p><button id="exportJson" class="btn">Ekspor JSON</button><button id="exportCsv" class="btn">Ekspor CSV</button></div>`);
+  document.getElementById("exportJson").onclick = async () => {
+    const transactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
+    download("backup-finance.json", JSON.stringify({ ...state, transactions }, null, 2), "application/json");
+  };
+  document.getElementById("exportCsv").onclick = async () => {
+    const transactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
     const header = "date,type,category,amount,account,note";
-    const body = state.transactions.map(t => `${t.date},${t.type},${t.category},${t.amount},${findAccount(t.accountId)?.name || ""},\"${(t.note || "").replaceAll('"', '""')}\"`).join("\n");
+    const body = transactions.map(t => `${t.date},${t.type},${t.category},${t.amount},${findAccount(t.accountId)?.name || ""},\"${(t.note || "").replaceAll('"', '""')}\"`).join("\n");
     download("transactions.csv", `${header}\n${body}`, "text/csv");
   };
 }
@@ -857,7 +1025,7 @@ async function validateSetupValues(formData) {
     const ping = await fetchWithTimeout(`${appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" });
     const data = await ping.json().catch(() => ({}));
     if (!ping.ok || data.ok === false) return { ok: false, message: data.message || "Ping ke Apps Script gagal." };
-    return { ok: true, remoteHasData: !!data.remoteHasData };
+    return { ok: true, remoteHasData: !!data.remoteHasData, capabilities: Array.isArray(data.capabilities) ? data.capabilities : [] };
   } catch (error) {
     return {
       ok: false,
@@ -899,9 +1067,13 @@ async function saveDataSourceFromForm(formData) {
 
   state.settings.sheetUrl = next;
   state.settings.appsScriptUrl = appsScriptUrl;
+  state.settings.syncCapabilities = validation.capabilities || [];
   state.settings.lastSourceChangeAt = new Date().toISOString();
   // Ganti sumber berarti data lokal belum pernah dikirim ke tujuan baru.
-  if (sourceChanged) state.settings.hasPendingSync = true;
+  if (sourceChanged) {
+    state.settings.hasPendingSync = true;
+    state.settings.incrementalBootstrapPending = true;
+  }
   saveState(false);
 
   // Baca balik dari localStorage sebelum mengaku sukses. Ini menangkap kegagalan storage/quota
@@ -942,9 +1114,13 @@ async function pullDataFromGoogleSheet() {
   pull.disabled = true;
   pull.setAttribute("aria-busy", "true");
   pull.textContent = "Menarik data…";
-  download(`backup-before-pull-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state, null, 2), "application/json");
 
   try {
+    // Cadangan wajib memuat SELURUH histori IndexedDB. state.transactions hanya berisi page
+    // cache (10–50 baris), sehingga JSON.stringify(state) biasa tidak bisa memulihkan 100k data.
+    const backupTransactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
+    download(`backup-before-pull-${new Date().toISOString().slice(0, 10)}.json`,
+      JSON.stringify({ ...state, transactions: backupTransactions }, null, 2), "application/json");
     const result = await loadStateFromGoogleSheet(state.settings.appsScriptUrl);
     if (!result.ok) {
       showToast(`Gagal menarik data: ${result.message}`);
@@ -952,6 +1128,9 @@ async function pullDataFromGoogleSheet() {
     }
     showToast("Data Google Sheet berhasil ditarik ke perangkat ini");
     render();
+  } catch (error) {
+    // Termasuk kegagalan backup: tanpa cadangan lengkap, pull tidak boleh menimpa data lokal.
+    showToast(`Backup lokal gagal dibuat — Tarik Data dibatalkan: ${error.message || error}`);
   } finally {
     // Bila render belum terjadi (misalnya request gagal), pulihkan tombol yang sama.
     if (pull.isConnected) {
@@ -964,9 +1143,31 @@ async function pullDataFromGoogleSheet() {
 
 async function loadStateFromGoogleSheet(appsScriptUrl) {
   try {
-    const response = await fetchWithTimeout(`${appsScriptUrl}?action=load&ts=${Date.now()}`, { cache: "no-store" }, SYNC_TIMEOUT_MS);
+    const paged = financeDbReady && (await getSyncCapabilities()).includes("paged-load-v1");
+    const response = await fetchWithTimeout(`${appsScriptUrl}?action=${paged ? "load-meta" : "load"}&ts=${Date.now()}`, { cache: "no-store" }, SYNC_TIMEOUT_MS);
+    // Batas kompatibilitas backend lama: tanpa "paged-load-v1", penarikan memakai action=load
+    // dalam SATU respons penuh. Aman untuk data menengah, tetapi bisa melewati batas eksekusi/
+    // ukuran respons Apps Script di skala ~100k baris. Gagal di sini TIDAK mengubah data lokal
+    // karena pemrosesan/penggantian hanya terjadi setelah respons lengkap diterima di bawah.
     const data = await response.json();
     if (!response.ok || !data.ok || !data.payload) throw new Error(data.message || "Data Spreadsheet gagal dimuat.");
+    if (paged) {
+      const expectedTotal = Number.isFinite(Number(data.totalTransactions)) ? Number(data.totalTransactions) : null;
+      await clearPullStaging(financeDb);
+      let cursor = null;
+      let done = false;
+      while (!done) {
+        const pageResponse = await fetchWithTimeout(`${appsScriptUrl}?action=load-page&table=transactions&limit=500&cursor=${encodeURIComponent(cursor || "0")}&ts=${Date.now()}`, { cache: "no-store" }, SYNC_TIMEOUT_MS);
+        const page = await pageResponse.json();
+        const check = pageResponse.ok && page.ok !== false ? validatePulledPage(page, cursor, expectedTotal) : { ok: false, message: page.message };
+        if (!check.ok) throw new Error(check.message || "Halaman transaksi gagal dimuat.");
+        await stagePulledRows(financeDb, page.rows);
+        cursor = check.nextCursor;
+        done = check.done;
+      }
+      transactionTotal = await replaceFromStaging(financeDb, expectedTotal);
+      data.payload.transactions = (await getTransactionPage(financeDb, 0, 50)).rows;
+    }
     const sourceSettings = { ...state.settings };
     const restored = normalizeState({ ...data.payload, settings: { ...(data.payload.settings || {}), ...sourceSettings, hasPendingSync: false, lastSyncedAt: new Date().toISOString() } });
     Object.keys(state).forEach(key => delete state[key]);
@@ -1009,8 +1210,9 @@ function wait(ms) {
  * Kirim satu POST sync dengan timeout dan diagnosis respons yang ketat.
  *
  * Apps Script sesekali dapat menjawab 429/5xx, koneksi terputus, atau halaman HTML sementara.
- * Semua itu bersifat sementara dan aman dicoba ulang karena payload sync menggambarkan state
- * lengkap (idempotent), bukan perintah "tambah satu baris".
+ * Semua itu bersifat sementara dan aman dicoba ulang karena keduanya idempotent: full sync
+ * menggambarkan state lengkap (bukan perintah "tambah satu baris"), sedangkan batch mutate
+ * ditandai mutation ID di server sehingga retry tidak menggandakan baris.
  */
 async function postSyncOnce(appsScriptUrl, body) {
   const response = await fetchWithTimeout(appsScriptUrl, {
@@ -1063,6 +1265,25 @@ async function postSyncWithRetry(appsScriptUrl, body, onRetry) {
   throw lastError;
 }
 
+async function getSyncCapabilities() {
+  let probed = false;
+  try {
+    const response = await fetchWithTimeout(`${state.settings.appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" }, 15000);
+    const data = await response.json();
+    if (response.ok && data.ok !== false) {
+      state.settings.syncCapabilities = Array.isArray(data.capabilities) ? data.capabilities : [];
+      saveState(false);
+      probed = true;
+    }
+  } catch (_) {
+    // Capability probe gagal tidak boleh menggagalkan sync; request memakai kontrak di bawah.
+  }
+  // Probe GAGAL → request OPERASI INI memakai kontrak backend lama ([]) apa pun isi cache.
+  // Cache lama hanya dipertahankan untuk tampilan UI, bukan untuk memutuskan bentuk request ini
+  // (mis. setelah URL Apps Script berubah atau backend di-rollback).
+  return probed ? (Array.isArray(state.settings.syncCapabilities) ? state.settings.syncCapabilities : []) : [];
+}
+
 async function performGoogleSheetSync() {
   const { appsScriptUrl, sheetUrl } = state.settings;
   if (!sheetUrl || !appsScriptUrl) {
@@ -1073,22 +1294,47 @@ async function performGoogleSheetSync() {
   }
   setSyncVisual("loading");
   try {
+    await persistenceQueue;
     // Tombol Sync sengaja satu arah: hanya mengirim state lokal ke Google Sheet.
-    // Membaca/menimpa data lokal adalah tindakan terpisah melalui tombol Tarik Data di Pengaturan.
+    // Backend lama menerima full sync; backend baru menerima outbox incremental.
     const params = new URLSearchParams();
-    // Payload disusun oleh syncPayload() (murni, dites terpisah): membuang status lokal yang
-    // berubah di sekitar sync dan membatasi panjang jejak aktivitas. Lihat src/utils.js.
-    params.set("payload", JSON.stringify(syncPayload(state)));
+    const capabilities = await getSyncCapabilities();
+    const outboxRows = financeDbReady ? await getOutbox(financeDb) : [];
+    // ID outbox ditangkap SEBELUM request terbang: mutasi baru selama request tidak boleh ikut
+    // di-ack, dan jalur full-sync/bootstrap harus melepas mutasi yang sudah tercakup snapshot.
+    const preSyncMutationIds = outboxRows.map(row => row.mutationId);
+    const canMutate = financeDbReady && capabilities.includes("mutations-v1") && !state.settings.incrementalBootstrapPending;
+    if (canMutate) {
+      const auxiliary = syncPayload({ ...state, transactions: [] }).payload;
+      params.set("payload", JSON.stringify({ action: "mutate", mutations: outboxRows, payload: auxiliary }));
+    } else {
+      const allTransactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
+      params.set("payload", JSON.stringify(syncPayload({ ...state, transactions: allTransactions })));
+    }
+    // Payload sudah dibangun dari state saat ini; semua perubahan sampai titik ini ikut terkirim.
+    state.settings.hasPendingSync = false;
     const data = await postSyncWithRetry(appsScriptUrl, params, (attempt, total) => {
       showToast(`Koneksi Google terganggu — mencoba lagi (${attempt}/${total})…`);
     });
+    if (financeDbReady && Array.isArray(data.appliedMutationIds)) {
+      await acknowledgeMutations(financeDb, data.appliedMutationIds);
+    } else if (financeDbReady && preSyncMutationIds.length) {
+      // Full-sync/bootstrap tidak mengembalikan appliedMutationIds, tetapi snapshot yang baru
+      // terkirim sudah mencakup mutasi-mutasi tersebut → aman dilepas dari outbox.
+      await acknowledgeMutations(financeDb, preSyncMutationIds);
+    }
+    const remainingOutbox = financeDbReady ? (await getOutbox(financeDb)).length : 0;
     setSyncVisual("success");
     showToast(syncResultMessage(data));
     addAudit("sync_google_sheet", "success");
     state.settings.lastSyncedAt = new Date().toISOString();
-    state.settings.hasPendingSync = false;
+    // Status bersih hanya bila outbox benar-benar kosong. Perubahan yang masuk selama request
+    // terbang menandakan masih ada yang harus dikirim pada sync berikutnya.
+    state.settings.hasPendingSync = remainingOutbox > 0 || state.settings.hasPendingSync;
+    state.settings.incrementalBootstrapPending = false;
     saveState(false);
   } catch (err) {
+    state.settings.hasPendingSync = true;
     const detail = err?.name === "AbortError"
       ? "Google terlalu lama merespons. Coba lagi sebentar."
       : (err?.message || "Kesalahan jaringan.");
@@ -1318,7 +1564,7 @@ function openTransactionEditor(txId) {
       danger: false
     });
     if (!ok) return;
-    updateTransaction(txNext);
+    await updateTransaction(txNext);
     close();
     render();
   };
