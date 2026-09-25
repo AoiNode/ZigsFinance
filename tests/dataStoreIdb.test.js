@@ -11,6 +11,7 @@ import {
   getOutbox,
   buildMutation,
   acknowledgeMutations,
+  mutationBatches,
 } from "../src/data-store.js";
 
 const open = () => openFinanceDb(new IDBFactory());
@@ -68,6 +69,15 @@ test("promosi pull sukses saat jumlah cocok dan outbox lama dibersihkan", async 
   assert.equal((await getOutbox(db)).length, 0, "outbox tidak boleh diputar ulang setelah pull");
 });
 
+test("fallback pull backend lama juga mengganti IndexedDB, bukan hanya cache UI", async () => {
+  const db = await open();
+  await add(db, "old-local");
+  const remote = [row("remote-1"), row("remote-2")];
+  await stagePulledRows(db, remote);
+  await replaceFromStaging(db, remote.length);
+  assert.deepEqual((await getAllTransactions(db)).map(r => r.id).sort(), ["remote-1", "remote-2"]);
+});
+
 test("Improvement 2: ack subset tidak menghapus mutasi yang belum diterima server", async () => {
   const db = await open();
   await add(db, "m1");
@@ -78,4 +88,11 @@ test("Improvement 2: ack subset tidak menghapus mutasi yang belum diterima serve
   const remaining = await getOutbox(db);
   assert.equal(remaining.length, 1, "mutasi yang belum di-ack harus bertahan");
   assert.equal(remaining[0].mutationId, rows[1].mutationId);
+});
+
+test("sync incremental memecah outbox lebih dari 500 tanpa kehilangan urutan", () => {
+  const rows = Array.from({ length: 1001 }, (_, i) => ({ mutationId: `m${i}` }));
+  const batches = mutationBatches(rows, 500);
+  assert.deepEqual(batches.map(batch => batch.length), [500, 500, 1]);
+  assert.deepEqual(batches.flat().map(row => row.mutationId), rows.map(row => row.mutationId));
 });

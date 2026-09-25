@@ -73,10 +73,17 @@ test("pull page wajib berurutan dan lengkap sebelum staging boleh dipromosikan",
 });
 
 test("Blocker 4: pull menolak saat total baris Sheet berubah di tengah jalan", () => {
-  const page = { rows: [tx("a", "2026-09-01", "expense", 1)], nextCursor: "1", done: false, total: 100 };
-  assert.equal(validatePulledPage(page, "0", 100).ok, true, "total sama → lanjut");
-  const changed = validatePulledPage(page, "0", 101);
+  const page = { rows: [tx("a", "2026-09-01", "expense", 1)], nextCursor: "1", done: false, total: 100, revision: "r1" };
+  assert.equal(validatePulledPage(page, "0", 100, "r1").ok, true, "total dan revision sama → lanjut");
+  const changed = validatePulledPage(page, "0", 101, "r1");
   assert.equal(changed.ok, false, "total berubah → batalkan pull");
+  assert.match(changed.message, /berubah saat ditarik/);
+});
+
+test("pull menolak isi berubah meski jumlah baris tetap sama", () => {
+  const page = { rows: [tx("b", "2026-09-01", "expense", 1)], nextCursor: null, done: true, total: 100, revision: "r2" };
+  const changed = validatePulledPage(page, "1", 100, "r1");
+  assert.equal(changed.ok, false);
   assert.match(changed.message, /berubah saat ditarik/);
 });
 

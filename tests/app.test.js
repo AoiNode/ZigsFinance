@@ -385,7 +385,7 @@ test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () 
   assert.match(tutorial, /\.toc-links\{display:flex[^}]*overflow-x:auto/);
 
   // Kode di tutorial harus berasal dari file backend terbaru, bukan salinan lama dalam HTML.
-  assert.match(tutorial, /apps-script\/Code\.gs\?v=7/);
+  assert.match(tutorial, /apps-script\/Code\.gs\?v=8/);
   assert.match(gs, /function fingerprint\(/, "Code.gs harus versi sync cepat");
   assert.match(gs, /dilewati\.push/, "Code.gs harus melewati tabel yang tidak berubah");
   assert.match(tutorial, /sync hanya menulis tabel yang berubah/);
@@ -417,6 +417,20 @@ test("Improvement 5: badge jumlah transaksi memakai total IndexedDB, bukan page 
   assert.match(app, /const allCount = allSummary \? allSummary\.count : state\.transactions\.length;/);
 });
 
+test("dashboard mengambil 5 transaksi terbaru langsung dari IndexedDB, bukan page cache", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const body = app.match(/async function renderDashboard\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(body, /getTransactionPage\(financeDb, 0, 5\)/);
+  assert.doesNotMatch(body, /const recentTx = state\.transactions\.slice\(0, 5\)/);
+});
+
+test("impor CSV memeriksa duplikat terhadap seluruh IndexedDB, bukan page aktif", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const body = app.match(/async function importCsv\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(body, /getAllTransactions\(financeDb\)/);
+  assert.match(body, /existingFingerprints/);
+});
+
 test("Blocker 2: kegagalan persist terlihat oleh pengguna dan call site menunggu mutasi", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   const add = app.match(/async function addTransaction\(tx\) \{[\s\S]*?\n\}/)?.[0] || "";
@@ -430,6 +444,6 @@ test("Blocker 2: kegagalan persist terlihat oleh pengguna dan call site menunggu
   assert.match(undo, /await persistTransactionMutation\("upsert", tx\)/);
   assert.match(app, /if \(!ok\) return;\s*\n\s*await addTransaction\(tx\);/, "submit form menunggu persist");
   assert.match(app, /if \(!ok\) return;\s*\n\s*await updateTransaction\(txNext\);/, "dialog edit menunggu persist");
-  assert.match(app, /await addTransaction\(\{ date, type, category, amount, note, accountId: account\.id \}\);/, "impor CSV menunggu persist per baris");
+  assert.match(app, /const added = await addTransaction\(candidate\);/, "impor CSV menunggu persist per baris");
 });
 

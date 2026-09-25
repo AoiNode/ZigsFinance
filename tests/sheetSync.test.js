@@ -62,13 +62,40 @@ test("Blocker 3: full-sync meng-ack outbox yang sudah tercakup snapshot", async 
   assert.match(body, /hasPendingSync =[\s\S]*getOutbox\(financeDb\)/, "status bersih hanya bila outbox benar-benar kosong");
 });
 
-test("load-meta memberi total transaksi untuk guard paginated pull", async () => {
+test("load-meta memberi total dan revision transaksi untuk guard paginated pull", async () => {
   const source = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
   assert.match(source, /totalTransactions/, "load-meta wajib mengembalikan jumlah baris transaksi");
+  assert.match(source, /revision/, "load-meta/load-page wajib mengembalikan revision untuk mendeteksi perubahan isi dengan total sama");
+  assert.match(source, /bumpDataRevision/, "setiap write wajib menaikkan revision");
+  assert.match(source, /withDataReadLock/, "load/load-meta/load-page wajib menunggu writer selesai");
+});
+
+test("fallback pull backend lama mempromosikan transaksi remote ke IndexedDB", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const body = app.match(/async function loadStateFromGoogleSheet[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(body, /if \(financeDbReady && !paged\)/);
+  assert.match(body, /stagePulledRows\(financeDb, legacyRemoteRows\)/);
+  assert.match(body, /replaceFromStaging\(financeDb, legacyRemoteRows\.length\)/);
+});
+
+test("Apps Script memvalidasi seluruh mutation batch sebelum write pertama", async () => {
+  const source = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
+  const body = source.match(/function applyMutations\(ss, mutations, payload\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const validation = body.indexOf("mutations.forEach(validateMutation)");
+  const firstWrite = body.indexOf("sh.deleteRow");
+  assert.ok(validation >= 0 && firstWrite > validation, "semua mutation harus divalidasi sebelum sheet diubah");
 });
 
 test("capability probe gagal memakai kontrak konservatif untuk request saat ini", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   const body = app.match(/async function getSyncCapabilities\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(body, /return probed \?/, "probe gagal → [] untuk operasi ini, cache lama hanya untuk UI");
+});
+
+test("client mengirim outbox incremental per batch maksimum 500 dan ack per respons", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const body = app.match(/async function performGoogleSheetSync\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(body, /mutationBatches\(outboxRows, 500\)/);
+  assert.match(body, /for \(const mutationBatch of/);
+  assert.match(body, /acknowledgeMutations\(financeDb, data\.appliedMutationIds\)/);
 });

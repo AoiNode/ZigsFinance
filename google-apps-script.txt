@@ -49,19 +49,45 @@ const SHEET_SPECS = {
 };
 
 const HASH_PREFIX = "zigsfi_hash_";
+const DATA_REVISION_KEY = "zigsfi_data_revision";
 const MUTATION_LOG_SHEET = "_zigsfi_mutations";
+
+function dataRevision() {
+  return PropertiesService.getScriptProperties().getProperty(DATA_REVISION_KEY) || "0";
+}
+
+function bumpDataRevision() {
+  var next = String(Number(dataRevision()) + 1);
+  PropertiesService.getScriptProperties().setProperty(DATA_REVISION_KEY, next);
+  return next;
+}
+
+function withDataReadLock(callback) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(25000)) throw new Error("Data sedang disinkronkan — coba tarik lagi sebentar.");
+    return callback();
+  } finally {
+    if (lock.hasLock()) lock.releaseLock();
+  }
+}
 
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
   if (action === "ping" || action === "load" || action === "load-meta" || action === "load-page") {
     try {
       var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-      var sheets = sheetMap(ss);
-      if (action === "load") return json({ ok: true, payload: loadState(ss, sheets) });
+      if (action === "ping") {
+        var pingSheets = sheetMap(ss);
+        return json({ ok: true, message: "connected", remoteHasData: remoteHasData(pingSheets), capabilities: ["mutations-v1", "paged-load-v1"] });
+      }
+      return withDataReadLock(function() {
+        var sheets = sheetMap(ss);
+        if (action === "load") return json({ ok: true, payload: loadState(ss, sheets) });
       if (action === "load-meta") {
         var txSheet = sheets.transactions;
         var totalTransactions = txSheet ? Math.max(0, txSheet.getLastRow() - 1) : 0;
-        return json({ ok: true, totalTransactions: totalTransactions, payload: {
+        return json({ ok: true, totalTransactions: totalTransactions, revision: dataRevision(), payload: {
           accounts: readSheetObjects(ss, "accounts", sheets),
           transactions: [],
           budgets: readSheetObjects(ss, "budgets", sheets),
@@ -71,8 +97,9 @@ function doGet(e) {
           auditLog: readSheetObjects(ss, "audit_log", sheets)
         }});
       }
-      if (action === "load-page") return json(loadPage(sheets, e.parameter || {}));
-      return json({ ok: true, message: "connected", remoteHasData: remoteHasData(sheets), capabilities: ["mutations-v1", "paged-load-v1"] });
+        if (action === "load-page") return json(loadPage(sheets, e.parameter || {}));
+        throw new Error("unknown action");
+      });
     } catch (err) {
       return json({ ok: false, message: err.message });
     }
@@ -145,6 +172,7 @@ function doPost(e) {
 
     /* Sekali tulis untuk semua sidik jari yang berubah. */
     if (ditulis.length) props.setProperties(sidikBaru);
+    if (ditulis.indexOf("transactions") !== -1) bumpDataRevision();
 
     return json({
       ok: true,
@@ -159,8 +187,16 @@ function doPost(e) {
   }
 }
 
+function validateMutation(m) {
+  if (!m || m.entity !== "transactions" || !m.mutationId || !m.id || (m.op !== "upsert" && m.op !== "delete")) throw new Error("invalid mutation");
+  if (m.op === "upsert" && (!m.record || String(m.record.id) !== String(m.id))) throw new Error("invalid mutation record");
+}
+
 function applyMutations(ss, mutations, payload) {
   if (!Array.isArray(mutations) || mutations.length > 500) throw new Error("invalid mutations batch");
+  // Validasi seluruh batch sebelum write pertama: satu mutation malformed tidak boleh
+  // meninggalkan mutation sebelumnya setengah-terapkan lalu mengembalikan respons gagal.
+  mutations.forEach(validateMutation);
   var sheets = sheetMap(ss);
   var sh = sheets.transactions;
   if (!sh) {
@@ -177,7 +213,6 @@ function applyMutations(ss, mutations, payload) {
   var appliedMutationIds = [];
   var logRows = [];
   mutations.forEach(function(m) {
-    if (!m || m.entity !== "transactions" || !m.mutationId || !m.id || (m.op !== "upsert" && m.op !== "delete")) throw new Error("invalid mutation");
     if (seen[m.mutationId]) { appliedMutationIds.push(m.mutationId); return; }
     var rowNumber = ids[String(m.id)];
     if (m.op === "delete") {
@@ -200,7 +235,10 @@ function applyMutations(ss, mutations, payload) {
     appliedMutationIds.push(m.mutationId);
     logRows.push([m.mutationId, new Date().toISOString()]);
   });
-  if (logRows.length) log.getRange(log.getLastRow() + 1, 1, logRows.length, 2).setValues(logRows);
+  if (logRows.length) {
+    log.getRange(log.getLastRow() + 1, 1, logRows.length, 2).setValues(logRows);
+    bumpDataRevision();
+  }
   /* Retensi jurnal mutation ID dibatasi ~5.000 entri terakhir (Improvement 3 review):
      retry yang datang JAUH lebih lambat dari itu (lintasan ribuan mutasi) bisa terlepas dari
      dedup. Aman karena op-nya idempotent — upsert menulis nilai sama, delete baris sudah
@@ -250,7 +288,7 @@ function loadPage(sheets, params) {
     });
   }
   var next = offset + count;
-  return { ok: true, table: table, rows: rows, nextCursor: next < total ? String(next) : null, done: next >= total, total: total };
+  return { ok: true, table: table, rows: rows, nextCursor: next < total ? String(next) : null, done: next >= total, total: total, revision: dataRevision() };
 }
 
 /* Ambil semua sheet sekali jalan. Versi lama memanggil getSheetByName 7 kali untuk

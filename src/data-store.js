@@ -72,9 +72,10 @@ export function computeSummary(rows = [], bounds = {}) {
   return summary;
 }
 
-export function validatePulledPage(page, previousCursor, expectedTotal = null) {
+export function validatePulledPage(page, previousCursor, expectedTotal = null, expectedRevision = null) {
   if (!page || !Array.isArray(page.rows) || typeof page.done !== "boolean") return { ok: false, message: "Halaman pull tidak valid" };
-  if (expectedTotal != null && Number(page.total) !== Number(expectedTotal)) {
+  if ((expectedTotal != null && Number(page.total) !== Number(expectedTotal)) ||
+      (expectedRevision != null && String(page.revision || "") !== String(expectedRevision))) {
     return { ok: false, message: "Data Google Sheet berubah saat ditarik — coba lagi." };
   }
   if (!page.done && (!page.nextCursor || page.nextCursor === previousCursor || page.rows.length === 0)) return { ok: false, message: "Cursor pull tidak maju" };
@@ -149,6 +150,13 @@ export async function getTransactionPage(db, offset = 0, limit = 10) {
 
 export async function getOutbox(db) {
   return requestResult(db.transaction(STORE_OUTBOX).objectStore(STORE_OUTBOX).getAll());
+}
+
+export function mutationBatches(rows = [], limit = 500) {
+  const size = Math.max(1, Number(limit) || 500);
+  const batches = [];
+  for (let offset = 0; offset < rows.length; offset += size) batches.push(rows.slice(offset, offset + size));
+  return batches;
 }
 
 export async function queueMutation(db, mutation) {

@@ -149,9 +149,9 @@
 
         <section class="step" id="script">
           <div class="step-head"><span class="step-number">2</span><div><h2>Buka Apps Script dan tempel kode terbaru</h2><ol><li>Di spreadsheet, pilih <strong>Extensions → Apps Script</strong>.</li><li>Hapus seluruh isi file <strong>Code.gs</strong>.</li><li>Tekan tombol <strong>Salin kode</strong> di bawah, lalu tempel semuanya.</li><li>Tekan <strong>Ctrl + S</strong> atau klik ikon Save.</li></ol></div></div>
-          <div class="callout fast"><strong>Versi terbaru (v7):</strong> sync hanya menulis tabel yang berubah, membatasi audit log, dan melewati tabel yang isinya sama. Baru: pengiriman inkremental lewat <strong>outbox yang idempotent</strong> (aman diulang saat koneksi putus), <strong>Tarik data</strong> bertahap 500–1000 baris per halaman dengan verifikasi jumlah total, dan cadangan otomatis seluruh histori sebelum data lokal ditimpa.</div>
+          <div class="callout fast"><strong>Versi terbaru (v8):</strong> sync hanya menulis tabel yang berubah, membatasi audit log, dan melewati tabel yang isinya sama. Baru: pengiriman inkremental lewat <strong>outbox yang idempotent</strong> (aman diulang saat koneksi putus), <strong>Tarik data</strong> bertahap 500–1000 baris per halaman dengan verifikasi jumlah total, dan cadangan otomatis seluruh histori sebelum data lokal ditimpa.</div>
           <div class="code-wrap">
-            <div class="code-bar"><span>Code.gs — versi inkremental &amp; tarik data bertahap (v7)</span><button class="copy-btn" id="copyCode" type="button">Salin kode</button></div>
+            <div class="code-bar"><span>Code.gs — versi inkremental &amp; tarik data bertahap (v8)</span><button class="copy-btn" id="copyCode" type="button">Salin kode</button></div>
             <pre id="scriptCode" tabindex="0" aria-label="Kode Apps Script">Memuat kode terbaru…</pre>
           </div>
           <div id="copyStatus" class="copy-status" role="status" aria-live="polite"></div>
@@ -189,7 +189,7 @@
     const output=document.getElementById('scriptCode');
     const copyButton=document.getElementById('copyCode');
     const copyStatus=document.getElementById('copyStatus');
-    fetch('./apps-script/Code.gs?v=7',{cache:'no-store'})
+    fetch('./apps-script/Code.gs?v=8',{cache:'no-store'})
       .then(r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.text()})
       .then(t=>{
         output.textContent=t.replace(/const SPREADSHEET_ID\s*=\s*"[^"]*";/,'const SPREADSHEET_ID = "ISI_SPREADSHEET_ID";');

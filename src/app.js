@@ -2,7 +2,7 @@
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
 import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=3";
-import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=1";
+import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, mutationBatches, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=2";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -571,7 +571,9 @@ async function renderDashboard() {
     const percent = Math.round((row.value / totalChart) * 100);
     return `<button class="chart-row ${hidden ? "muted" : ""}" type="button" data-chart-series="${row.key}" aria-label="Tampil atau sembunyikan ${row.label}"><span class="dot ${row.colorClass}"></span>${row.label}: ${fmt(row.value)} (${percent}%)</button>`;
   }).join("");
-  const recentTx = state.transactions.slice(0, 5);
+  // state.transactions hanya cache halaman yang terakhir dilihat. Beranda harus selalu
+  // mengambil 5 terbaru dari IDB agar tidak menampilkan halaman lama sebagai "Aktivitas terbaru".
+  const recentTx = financeDbReady ? (await getTransactionPage(financeDb, 0, 5)).rows : state.transactions.slice(0, 5);
   const recentRows = recentTx.map(t => `<button class="activity-row" type="button" data-go-page="transactions"><span class="activity-icon ${t.type}">${t.type === "income" ? icon("income") : icon("expense")}</span><span><strong>${escapeHtml(t.category)}</strong><small>${t.date}${t.note ? ` · ${escapeHtml(t.note)}` : ""}</small></span><b class="${t.type}">${t.type === "income" ? "+" : "−"}${fmt(t.amount)}</b></button>`).join("");
   const goalRows = state.goals.slice(0, 3).map(g => { const progress = g.target > 0 ? Math.min(100, (g.current / g.target) * 100) : 0; return `<div class="goal-mini"><div><strong>${escapeHtml(g.name)}</strong><small>${Math.round(progress)}% tercapai</small></div><span>${fmt(g.current)} / ${fmt(g.target)}</span><div class="progress"><span style="width:${progress}%"></span></div></div>`; }).join("");
   setContent(`<section class="dashboard-hero"><div><span class="section-kicker">Saldo Dompet Utama</span><h2>${fmt(netWorth)}</h2><p>${savingRate >= 0 ? "Keuanganmu masih terkendali." : "Pengeluaran sedang lebih besar dari pemasukan."}</p></div></section><div class="period-bar"><span class="period-range">${rangeLabel} · ${periodCount} transaksi</span>${periodSwitch("dashboard")}</div><div class="metrics modern-metrics">${metric(`Pemasukan ${periodLabel}`, fmt(monthlyIncome))}${metric(`Pengeluaran ${periodLabel}`, fmt(monthlyExpense))}${metric(`Rasio menabung ${periodLabel}`, `${savingRate.toFixed(1)}%`)}${metric("Tagihan aktif", `${totalActiveBills}`)}</div><section class="dashboard-grid"><div class="card cashflow-card"><div class="card-title-row"><div><span class="section-kicker">Gambaran ${periodLabel}</span><h3>Arus uang</h3></div><button class="text-btn" type="button" data-go-page="reports">Lihat laporan →</button></div><div class="mini-chart"><div class="donut" style="--p1:${p1}%;--p2:${p2}%"></div><div class="chart-legend">${chartRows}</div></div></div><div class="card bill-preview"><div class="card-title-row"><div><span class="section-kicker">Perlu perhatian</span><h3>Tagihan</h3></div><button class="text-btn" type="button" data-go-page="bills">Kelola →</button></div><div class="bill-highlight"><strong>${dueCount ? `${dueCount} segera jatuh tempo` : "Semua aman"}</strong><span>${dueCount ? fmt(dueBillsAmount) : "Tidak ada tagihan dalam 3 hari"}</span></div><p>${activeBillText}</p></div></section><section class="dashboard-grid lower"><div class="card"><div class="card-title-row"><div><span class="section-kicker">Terbaru</span><h3>Aktivitas</h3></div><button class="text-btn" type="button" data-go-page="transactions">Semua →</button></div><div class="activity-list">${recentRows || emptyState("Belum ada transaksi", "Catat pemasukan atau pengeluaran pertamamu.")}</div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">Progres</span><h3>Target keuangan</h3></div><button class="text-btn" type="button" data-go-page="goals">Kelola →</button></div>${goalRows || emptyState("Belum ada target", "Buat target agar tabungan lebih terarah.")}</div></section><div class="fab-wrap"><button id="syncNowBtnFab" class="sync-fab-btn sync-top-btn sync-btn" type="button" aria-label="Sinkron Google Sheet"></button><button class="fab" id="quickFab" type="button" aria-label="Aksi cepat">${icon("plus")}</button><div class="fab-menu"><button data-quick-type="income" title="Tambah pemasukan" aria-label="Tambah pemasukan">${icon("income")}</button><button data-quick-type="expense" title="Tambah pengeluaran" aria-label="Tambah pengeluaran">${icon("expense")}</button></div></div>`);
@@ -783,6 +785,11 @@ async function importCsv() {
     if (v === "expense" || v === "pengeluaran") return "expense";
     return "";
   };
+  // Cache UI hanya memuat satu halaman. Fingerprint harus dibangun dari seluruh IDB supaya
+  // impor tidak menggandakan transaksi lama yang kebetulan tidak sedang terlihat.
+  const existingRows = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
+  const fingerprint = (tx) => `${tx.date}\u0000${tx.type}\u0000${Number(tx.amount)}\u0000${tx.category}`;
+  const existingFingerprints = new Set(existingRows.map(fingerprint));
   for (const r of rows) {
     const date = pick(r, ["date", "tanggal"]);
     const type = toType(pick(r, ["type", "tipe"]));
@@ -793,9 +800,11 @@ async function importCsv() {
     const note = pick(r, ["note", "catatan"]);
     const account = state.accounts.find(a => a.name === accountName) || state.accounts[0];
     if (!date || !type || !category || !Number.isFinite(amount) || amount <= 0) continue;
-    const duplicate = state.transactions.some(t => t.date === date && t.type === type && t.amount === amount && t.category === category);
-    if (duplicate) continue;
-    await addTransaction({ date, type, category, amount, note, accountId: account.id });
+    const candidate = { date, type, category, amount, note, accountId: account.id };
+    const key = fingerprint(candidate);
+    if (existingFingerprints.has(key)) continue;
+    const added = await addTransaction(candidate);
+    if (added) existingFingerprints.add(key);
   }
   addAudit("import_csv", f.name);
   saveState();
@@ -1153,19 +1162,29 @@ async function loadStateFromGoogleSheet(appsScriptUrl) {
     if (!response.ok || !data.ok || !data.payload) throw new Error(data.message || "Data Spreadsheet gagal dimuat.");
     if (paged) {
       const expectedTotal = Number.isFinite(Number(data.totalTransactions)) ? Number(data.totalTransactions) : null;
+      const expectedRevision = data.revision == null ? null : String(data.revision);
       await clearPullStaging(financeDb);
       let cursor = null;
       let done = false;
       while (!done) {
         const pageResponse = await fetchWithTimeout(`${appsScriptUrl}?action=load-page&table=transactions&limit=500&cursor=${encodeURIComponent(cursor || "0")}&ts=${Date.now()}`, { cache: "no-store" }, SYNC_TIMEOUT_MS);
         const page = await pageResponse.json();
-        const check = pageResponse.ok && page.ok !== false ? validatePulledPage(page, cursor, expectedTotal) : { ok: false, message: page.message };
+        const check = pageResponse.ok && page.ok !== false ? validatePulledPage(page, cursor, expectedTotal, expectedRevision) : { ok: false, message: page.message };
         if (!check.ok) throw new Error(check.message || "Halaman transaksi gagal dimuat.");
         await stagePulledRows(financeDb, page.rows);
         cursor = check.nextCursor;
         done = check.done;
       }
       transactionTotal = await replaceFromStaging(financeDb, expectedTotal);
+      data.payload.transactions = (await getTransactionPage(financeDb, 0, 50)).rows;
+    }
+    if (financeDbReady && !paged) {
+      // Backend lama mengirim transaksi penuh dalam action=load. Promosikan ke IDB juga;
+      // hanya mengganti state/cache membuat hasil pull hilang pada reload berikutnya.
+      const legacyRemoteRows = Array.isArray(data.payload.transactions) ? data.payload.transactions : [];
+      await clearPullStaging(financeDb);
+      await stagePulledRows(financeDb, legacyRemoteRows);
+      transactionTotal = await replaceFromStaging(financeDb, legacyRemoteRows.length);
       data.payload.transactions = (await getTransactionPage(financeDb, 0, 50)).rows;
     }
     const sourceSettings = { ...state.settings };
@@ -1304,25 +1323,37 @@ async function performGoogleSheetSync() {
     // di-ack, dan jalur full-sync/bootstrap harus melepas mutasi yang sudah tercakup snapshot.
     const preSyncMutationIds = outboxRows.map(row => row.mutationId);
     const canMutate = financeDbReady && capabilities.includes("mutations-v1") && !state.settings.incrementalBootstrapPending;
+    let data;
     if (canMutate) {
       const auxiliary = syncPayload({ ...state, transactions: [] }).payload;
-      params.set("payload", JSON.stringify({ action: "mutate", mutations: outboxRows, payload: auxiliary }));
+      // Apps Script membatasi satu mutation batch maksimal 500. Outbox kosong tetap mengirim
+      // satu batch agar accounts/budgets/settings/audit ikut tersinkron.
+      const batches = mutationBatches(outboxRows, 500);
+      if (batches.length === 0) batches.push([]);
+      for (const mutationBatch of batches) {
+        params.set("payload", JSON.stringify({ action: "mutate", mutations: mutationBatch, payload: auxiliary }));
+        data = await postSyncWithRetry(appsScriptUrl, params, (attempt, total) => {
+          showToast(`Koneksi Google terganggu — mencoba lagi (${attempt}/${total})…`);
+        });
+        if (Array.isArray(data.appliedMutationIds)) {
+          // Ack langsung per batch: batch sukses tidak dikirim ulang bila batch berikutnya gagal.
+          await acknowledgeMutations(financeDb, data.appliedMutationIds);
+        }
+      }
     } else {
       const allTransactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
       params.set("payload", JSON.stringify(syncPayload({ ...state, transactions: allTransactions })));
+      data = await postSyncWithRetry(appsScriptUrl, params, (attempt, total) => {
+        showToast(`Koneksi Google terganggu — mencoba lagi (${attempt}/${total})…`);
+      });
+      if (financeDbReady && preSyncMutationIds.length) {
+        // Full-sync/bootstrap tidak mengembalikan appliedMutationIds, tetapi snapshot yang baru
+        // terkirim sudah mencakup mutasi-mutasi tersebut → aman dilepas dari outbox.
+        await acknowledgeMutations(financeDb, preSyncMutationIds);
+      }
     }
     // Payload sudah dibangun dari state saat ini; semua perubahan sampai titik ini ikut terkirim.
     state.settings.hasPendingSync = false;
-    const data = await postSyncWithRetry(appsScriptUrl, params, (attempt, total) => {
-      showToast(`Koneksi Google terganggu — mencoba lagi (${attempt}/${total})…`);
-    });
-    if (financeDbReady && Array.isArray(data.appliedMutationIds)) {
-      await acknowledgeMutations(financeDb, data.appliedMutationIds);
-    } else if (financeDbReady && preSyncMutationIds.length) {
-      // Full-sync/bootstrap tidak mengembalikan appliedMutationIds, tetapi snapshot yang baru
-      // terkirim sudah mencakup mutasi-mutasi tersebut → aman dilepas dari outbox.
-      await acknowledgeMutations(financeDb, preSyncMutationIds);
-    }
     const remainingOutbox = financeDbReady ? (await getOutbox(financeDb)).length : 0;
     setSyncVisual("success");
     showToast(syncResultMessage(data));
