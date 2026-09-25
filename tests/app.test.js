@@ -442,8 +442,8 @@ test("Blocker 2: kegagalan persist terlihat oleh pengguna dan call site menunggu
   assert.match(del, /await persistTransactionMutation\("delete"/);
   const undo = app.match(/async function undoDeleteTransaction\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(undo, /await persistTransactionMutation\("upsert", tx\)/);
-  assert.match(app, /if \(!ok\) return;\s*\n\s*await addTransaction\(tx\);/, "submit form menunggu persist");
-  assert.match(app, /if \(!ok\) return;\s*\n\s*await updateTransaction\(txNext\);/, "dialog edit menunggu persist");
+  assert.match(app, /const added = await addTransaction\(tx\);\s*\n\s*if \(!added\) return;/, "submit form hanya reset setelah persist sukses");
+  assert.match(app, /const updated = await updateTransaction\(txNext\);\s*\n\s*if \(!updated\) return;/, "dialog edit hanya tutup setelah persist sukses");
   assert.match(app, /const added = await addTransaction\(candidate\);/, "impor CSV menunggu persist per baris");
 });
 

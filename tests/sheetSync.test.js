@@ -51,7 +51,10 @@ test("Blocker 5: backup sebelum Tarik Data memuat seluruh histori IndexedDB", as
   const body = app.match(/async function pullDataFromGoogleSheet[\s\S]*?\n\}/)?.[0] || "";
   assert.match(body, /getAllTransactions\(financeDb\)/, "backup wajib mengambil seluruh histori, bukan page cache");
   assert.match(body, /transactions: backupTransactions/, "backup JSON memuat field transactions penuh");
-  assert.match(body, /Backup lokal gagal dibuat/i, "backup gagal harus membatalkan pull");
+  assert.match(body, /Tarik Data dibatalkan/i, "error apa pun harus membatalkan pull dengan pesan akurat");
+  assert.match(body, /pullInProgress = true/);
+  assert.match(body, /await persistenceQueue/);
+  assert.match(body, /pullInProgress = false/);
 });
 
 test("Blocker 3: full-sync meng-ack outbox yang sudah tercakup snapshot", async () => {

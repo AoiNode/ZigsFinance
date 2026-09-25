@@ -2,7 +2,7 @@
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
 import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=3";
-import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, mutationBatches, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=2";
+import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, mutationBatches, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=3";
 
 const NAV = [
   ["dashboard", "Beranda"],
@@ -75,6 +75,7 @@ let financeDb = null;
 let financeDbReady = false;
 let persistenceQueue = Promise.resolve();
 let transactionTotal = 0;
+let pullInProgress = false;
 
 function enqueuePersistence(work) {
   const task = persistenceQueue.catch(() => {}).then(async () => {
@@ -646,7 +647,8 @@ async function renderTransactions() {
       danger: false
     });
     if (!ok) return;
-    await addTransaction(tx);
+    const added = await addTransaction(tx);
+    if (!added) return;
     e.target.reset();
     e.target.elements.date.value = today();
     render();
@@ -665,45 +667,47 @@ async function renderTransactions() {
 }
 
 async function addTransaction(tx) {
+  if (pullInProgress) { showToast("Tunggu Tarik Data selesai sebelum mengubah transaksi"); return false; }
   tx.id = tx.id || id();
+  const saved = await persistTransactionMutation("upsert", tx);
+  if (!saved.ok) {
+    showToast("Transaksi belum tersimpan di perangkat — coba lagi");
+    return false;
+  }
   state.transactions.unshift(tx);
+  transactionTotal += 1;
   adjustAccountBalance(tx.accountId, tx.type === "income" ? tx.amount : -tx.amount);
   if (!state.categories.includes(tx.category)) state.categories.push(tx.category);
   addAudit("add_transaction", `${tx.type} ${tx.amount}`);
-  const saved = await persistTransactionMutation("upsert", tx);
   saveState();
-  if (!saved.ok) {
-    showToast("Transaksi belum tersimpan di perangkat — coba lagi");
-    render();
-    return false;
-  }
   showToast("Transaksi ditambahkan");
   return true;
 }
 
 async function updateTransaction(nextTx) {
+  if (pullInProgress) { showToast("Tunggu Tarik Data selesai sebelum mengubah transaksi"); return false; }
   const idx = state.transactions.findIndex(t => t.id === nextTx.id);
   if (idx < 0) return false;
   const prev = state.transactions[idx];
+  const saved = await persistTransactionMutation("upsert", nextTx);
+  if (!saved.ok) {
+    showToast("Perubahan belum tersimpan di perangkat — coba lagi");
+    return false;
+  }
   adjustAccountBalance(prev.accountId, prev.type === "income" ? -prev.amount : prev.amount);
   adjustAccountBalance(nextTx.accountId, nextTx.type === "income" ? nextTx.amount : -nextTx.amount);
   state.transactions[idx] = nextTx;
   if (!state.categories.includes(nextTx.category)) state.categories.push(nextTx.category);
   addAudit("edit_transaction", `${nextTx.type} ${nextTx.amount}`);
-  const saved = await persistTransactionMutation("upsert", nextTx);
   saveState();
-  if (!saved.ok) {
-    showToast("Perubahan belum tersimpan di perangkat — coba lagi");
-    render();
-    return false;
-  }
   showToast("Transaksi diperbarui");
   return true;
 }
 
 async function deleteTransaction(txId) {
+  if (pullInProgress) { showToast("Tunggu Tarik Data selesai sebelum mengubah transaksi"); return false; }
   const idx = state.transactions.findIndex(t => t.id === txId);
-  if (idx < 0) return;
+  if (idx < 0) return false;
   const tx = state.transactions[idx];
   const ok = await showConfirmDialog({
     title: "Hapus transaksi?",
@@ -714,16 +718,16 @@ async function deleteTransaction(txId) {
   if (!ok) return;
   if (pendingDeleteTimer) window.clearTimeout(pendingDeleteTimer);
   pendingDeletedTx = null;
-  adjustAccountBalance(tx.accountId, tx.type === "income" ? -tx.amount : tx.amount);
-  state.transactions.splice(idx, 1);
   const saved = await persistTransactionMutation("delete", { id: tx.id });
-  addAudit("delete_transaction", `${tx.type} ${tx.amount}`);
-  saveState();
   if (!saved.ok) {
     showToast("Penghapusan belum tersimpan di perangkat — coba lagi");
-    render();
-    return;
+    return false;
   }
+  adjustAccountBalance(tx.accountId, tx.type === "income" ? -tx.amount : tx.amount);
+  state.transactions.splice(idx, 1);
+  transactionTotal = Math.max(0, transactionTotal - 1);
+  addAudit("delete_transaction", `${tx.type} ${tx.amount}`);
+  saveState();
   pendingDeletedTx = { tx, index: idx };
   showActionToast("Transaksi dihapus", "Urungkan", undoDeleteTransaction, 5000);
   pendingDeleteTimer = window.setTimeout(() => { pendingDeletedTx = null; }, 5200);
@@ -731,23 +735,25 @@ async function deleteTransaction(txId) {
 }
 
 async function undoDeleteTransaction() {
-  if (!pendingDeletedTx) return;
+  if (!pendingDeletedTx) return false;
+  if (pullInProgress) { showToast("Tunggu Tarik Data selesai sebelum mengubah transaksi"); return false; }
   const { tx, index } = pendingDeletedTx;
+  const saved = await persistTransactionMutation("upsert", tx);
+  if (!saved.ok) {
+    showToast("Pemulihan belum tersimpan di perangkat — coba lagi");
+    return false;
+  }
   const nextIndex = Math.max(0, Math.min(index, state.transactions.length));
   state.transactions.splice(nextIndex, 0, tx);
+  transactionTotal += 1;
   adjustAccountBalance(tx.accountId, tx.type === "income" ? tx.amount : -tx.amount);
   addAudit("undo_delete_transaction", `${tx.type} ${tx.amount}`);
-  const saved = await persistTransactionMutation("upsert", tx);
   saveState();
   pendingDeletedTx = null;
   if (pendingDeleteTimer) window.clearTimeout(pendingDeleteTimer);
-  if (!saved.ok) {
-    showToast("Pemulihan belum tersimpan di perangkat — coba lagi");
-    render();
-    return;
-  }
   showToast("Penghapusan dibatalkan");
   render();
+  return true;
 }
 
 function fillTransactionForm(txId, targetFormId = "txForm") {
@@ -771,6 +777,7 @@ function adjustAccountBalance(accountId, delta) {
 }
 
 async function importCsv() {
+  if (pullInProgress) { showToast("Tunggu Tarik Data selesai sebelum mengimpor transaksi"); return; }
   const f = document.getElementById("csvInput").files[0];
   if (!f) return;
   const text = await f.text();
@@ -1123,8 +1130,12 @@ async function pullDataFromGoogleSheet() {
   pull.disabled = true;
   pull.setAttribute("aria-busy", "true");
   pull.textContent = "Menarik data…";
+  pullInProgress = true;
 
   try {
+    // Tunggu mutasi yang sudah dimulai sebelum pull dikunci. Mutator baru ditolak oleh
+    // pullInProgress agar tidak tersapu saat staging dipromosikan.
+    await persistenceQueue;
     // Cadangan wajib memuat SELURUH histori IndexedDB. state.transactions hanya berisi page
     // cache (10–50 baris), sehingga JSON.stringify(state) biasa tidak bisa memulihkan 100k data.
     const backupTransactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;
@@ -1138,9 +1149,9 @@ async function pullDataFromGoogleSheet() {
     showToast("Data Google Sheet berhasil ditarik ke perangkat ini");
     render();
   } catch (error) {
-    // Termasuk kegagalan backup: tanpa cadangan lengkap, pull tidak boleh menimpa data lokal.
-    showToast(`Backup lokal gagal dibuat — Tarik Data dibatalkan: ${error.message || error}`);
+    showToast(`Tarik Data dibatalkan: ${error.message || error}`);
   } finally {
+    pullInProgress = false;
     // Bila render belum terjadi (misalnya request gagal), pulihkan tombol yang sama.
     if (pull.isConnected) {
       pull.disabled = false;
@@ -1595,7 +1606,8 @@ function openTransactionEditor(txId) {
       danger: false
     });
     if (!ok) return;
-    await updateTransaction(txNext);
+    const updated = await updateTransaction(txNext);
+    if (!updated) return;
     close();
     render();
   };

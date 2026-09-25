@@ -28,12 +28,12 @@ test("Blocker 1: marker localStorage hilang TIDAK menghapus IndexedDB yang valid
   assert.equal(plan.safeToStripLocalTransactions, true);
 });
 
-test("Blocker 1b: legacy dan IDB berbeda disatukan, tidak ada baris yang hilang", async () => {
+test("IDB non-kosong tidak menghidupkan kembali ID legacy yang sudah dihapus", async () => {
   const db = await open();
-  await add(db, "a");
-  const plan = await migrateLegacyTransactions(db, [row("b")]);
+  await add(db, "aktif");
+  const plan = await migrateLegacyTransactions(db, [row("sudah-dihapus")]);
   const ids = (await getAllTransactions(db)).map(r => r.id).sort();
-  assert.deepEqual(ids, ["a", "b"], "union legacy + IDB, tanpa clear");
+  assert.deepEqual(ids, ["aktif"], "snapshot legacy stale tidak boleh di-union ke IDB");
   assert.equal(plan.safeToStripLocalTransactions, true);
 });
 

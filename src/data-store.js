@@ -185,23 +185,9 @@ export async function migrateLegacyTransactions(db, localRows = []) {
   const current = await getAllTransactions(db);
 
   if (current.length > 0) {
-    // IndexedDB berisi data → IDB adalah sumber kebenaran. Legacy hanya MENAMBAH baris yang
-    // belum ada; tidak pernah menghapus/menimpa isi IDB. Ini menutup kasus marker localStorage
-    // hilang (mis. tab lama masih menulis state versi sebelumnya) tanpa mengosongkan database.
-    const known = new Set(current.map(row => String(row.id)));
-    const missing = legacy.filter(row => !known.has(String(row.id)));
-    if (missing.length === 0) {
-      return { action: "idb-authoritative", count: current.length, checksum: checksumRows(current), safeToStripLocalTransactions: true };
-    }
-    const tx = db.transaction([STORE_TRANSACTIONS, STORE_METADATA], "readwrite");
-    const store = tx.objectStore(STORE_TRANSACTIONS);
-    missing.forEach(row => store.put(row));
-    tx.objectStore(STORE_METADATA).put({ key: "legacy_migration", added: missing.length, count: current.length + missing.length, at: new Date().toISOString() });
-    await transactionDone(tx);
-    const merged = await getAllTransactions(db);
-    const mergedIds = new Set(merged.map(row => String(row.id)));
-    if (!legacy.every(row => mergedIds.has(String(row.id)))) throw new Error("Verifikasi gabungan migrasi IndexedDB gagal");
-    return { action: "merged", count: merged.length, checksum: checksumRows(merged), safeToStripLocalTransactions: true };
+    // IndexedDB non-kosong selalu otoritatif. Jangan union snapshot localStorage lama:
+    // ID yang tidak ada di IDB bisa merupakan transaksi yang memang sudah dihapus.
+    return { action: "idb-authoritative", count: current.length, checksum: checksumRows(current), safeToStripLocalTransactions: true };
   }
 
   // IDB kosong: salin legacy. Tidak ada store.clear() di sini — memang tidak ada yang perlu

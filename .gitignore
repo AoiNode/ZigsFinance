@@ -6,7 +6,3 @@ node_modules/
 *.log
 dist/
 .vercel/
-
-# Lockfile: resolved URL pakai mirror npm lokal (mirrors.tencentyun.com) dan
-# memecahkan build Vercel yang tak bisa mengaksesnya. Repo ini sengaja tanpa lockfile.
-package-lock.json
