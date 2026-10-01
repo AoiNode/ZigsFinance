@@ -216,3 +216,20 @@ button:active,.btn:active,.icon-btn:active,.activity-row:active,.chart-row:activ
  html{scroll-behavior:auto}
  *,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
+
+/* iPhone/iOS PWA only: keep the sticky app bar below the notch/status bar.
+   Android remains unchanged because it does not support -webkit-touch-callout. */
+@supports (-webkit-touch-callout:none){
+ @media(max-width:980px){
+  html,body{background:#f7f8f5}
+  header{
+   top:0;
+   height:calc(64px + env(safe-area-inset-top));
+   min-height:calc(64px + env(safe-area-inset-top));
+   padding-top:env(safe-area-inset-top);
+  }
+  .setup-gate,.modal-backdrop,.confirm-backdrop{
+   padding-top:env(safe-area-inset-top);
+  }
+ }
+}

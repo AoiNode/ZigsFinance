@@ -119,6 +119,14 @@ test("motion final menghapus card entrance dan hover lift, menyisakan feedback A
   assert.match(css, /prefers-reduced-motion:reduce/);
 });
 
+test("iPhone PWA memberi safe-area atas tanpa mengubah Android", async () => {
+  const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /@supports \(-webkit-touch-callout:none\)/, "fix harus khusus engine iOS\/WebKit");
+  assert.match(css, /height:calc\(64px \+ env\(safe-area-inset-top\)\)/);
+  assert.match(css, /padding-top:env\(safe-area-inset-top\)/);
+  assert.match(css, /Android remains unchanged/);
+});
+
 test("sumInPeriod scopes amounts without bleeding across year or period", () => {
   const transactions = [
     { date: "2026-09-11", type: "expense", amount: 50000 },
