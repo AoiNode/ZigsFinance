@@ -109,6 +109,16 @@ test("pemilih bulan tersedia terpisah di beranda dan laporan tanpa switch", asyn
   assert.doesNotMatch(app, /data-period-toggle|togglePeriodVariant/);
 });
 
+test("motion final menghapus card entrance dan hover lift, menyisakan feedback Android", async () => {
+  const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /Final native-motion cleanup/);
+  assert.match(css, /\.card,\.metric,\.dashboard-hero,\.bill-summary\{[\s\S]*animation:none!important/);
+  assert.match(css, /\.card:hover,\.metric:hover,\.btn:hover,\.bill-item:hover\{[\s\S]*transform:none!important/);
+  assert.match(css, /\.modal-card,\.confirm-card,\.setup-card\{animation:android-sheet-in/);
+  assert.match(css, /\.toast\.show\{animation:android-snackbar-in/);
+  assert.match(css, /prefers-reduced-motion:reduce/);
+});
+
 test("sumInPeriod scopes amounts without bleeding across year or period", () => {
   const transactions = [
     { date: "2026-09-11", type: "expense", amount: 50000 },

@@ -179,3 +179,40 @@ main{max-width:1560px;width:100%;margin:0 auto;padding-top:34px}header{min-heigh
  .report-totals{grid-template-columns:1fr;gap:8px}
  .report-totals>div{padding:13px}
 }
+
+/* Final native-motion cleanup: no decorative web entrances or hover lifting. */
+.card,.metric,.dashboard-hero,.bill-summary{
+ animation:none!important;
+ transition:background-color 160ms cubic-bezier(.2,0,0,1),box-shadow 180ms cubic-bezier(.2,0,0,1),border-color 160ms cubic-bezier(.2,0,0,1)!important;
+}
+.grid>.card,.dashboard-grid .card,.grid>.metric{animation-delay:0s!important}
+.card:hover,.metric:hover,.btn:hover,.bill-item:hover{
+ transform:none!important;
+}
+.progress span,.type-switch input:checked+span,.alert-summary[open] .alert-detail{
+ animation:none!important;
+}
+
+/* Keep only native-feeling interaction feedback. */
+button,.btn,.icon-btn,.text-btn,.activity-row,.chart-row,.bill-item,.bottom-nav button{
+ transition:transform 100ms cubic-bezier(.2,0,0,1),background-color 150ms cubic-bezier(.2,0,0,1),color 150ms cubic-bezier(.2,0,0,1),box-shadow 180ms cubic-bezier(.2,0,0,1)!important;
+}
+button:active,.btn:active,.icon-btn:active,.activity-row:active,.chart-row:active,.bill-item:active{
+ transform:scale(.98)!important;
+}
+.bottom-nav button:active,.fab:active{transform:scale(.92)!important}
+.bottom-nav button.active .nav-icon,.bottom-nav button.active:after{animation:none!important}
+.fab-menu button{animation:none!important}
+
+/* Functional Android motion: navigation containers, sheets, snackbar, FAB and loading only. */
+.modal-backdrop,.confirm-backdrop,.setup-gate{animation:android-scrim-in 160ms linear both!important}
+.modal-card,.confirm-card,.setup-card{animation:android-sheet-in 280ms cubic-bezier(.2,0,0,1) both!important}
+.toast.show{animation:android-snackbar-in 220ms cubic-bezier(0,0,0,1) both!important}
+.fab-menu{transition:opacity 150ms cubic-bezier(.2,0,0,1),transform 200ms cubic-bezier(0,0,0,1)!important}
+.sync-loading .sync-icon svg{animation:spin .9s linear infinite!important}
+.skeleton-line{animation:android-pulse 1200ms ease-in-out infinite!important}
+
+@media(prefers-reduced-motion:reduce){
+ html{scroll-behavior:auto}
+ *,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
