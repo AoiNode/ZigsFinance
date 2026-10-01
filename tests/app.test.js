@@ -284,6 +284,23 @@ test("Pengaturan menyediakan Tarik Data dengan dua konfirmasi sebelum overwrite 
   assert.match(pullBody, /pull\.disabled = false/);
 });
 
+test("sync rutin langsung POST memakai capability cache tanpa ping tambahan", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const capabilityBody = app.match(/async function getSyncCapabilities\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(capabilityBody, /if \(cached\.length\) return cached/);
+  assert.match(capabilityBody, /action=ping/, "probe tetap tersedia untuk instalasi lama tanpa cache");
+  assert.match(app, /const capabilities = await getSyncCapabilities\(\)/);
+});
+
+test("backend menerapkan puluhan mutasi dalam satu batch write", async () => {
+  const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
+  const mutationBody = gs.match(/function applyMutations\(ss, mutations, payload\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(mutationBody, /transactionRows/);
+  assert.match(mutationBody, /writeSheetValues\(sh, SHEET_SPECS\.transactions, transactionRows\)/);
+  assert.doesNotMatch(mutationBody, /sh\.deleteRow\(rowNumber\)/);
+  assert.doesNotMatch(mutationBody, /sh\.getRange\(rowNumber[^\n]*setValues/);
+});
+
 test("sync mencoba ulang gangguan sementara sebelum menjadi merah", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
 
@@ -416,7 +433,7 @@ test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () 
   assert.match(tutorial, /\.toc-links\{display:flex[^}]*overflow-x:auto/);
 
   // Kode di tutorial harus berasal dari file backend terbaru, bukan salinan lama dalam HTML.
-  assert.match(tutorial, /apps-script\/Code\.gs\?v=8/);
+  assert.match(tutorial, /apps-script\/Code\.gs\?v=9/);
   assert.match(gs, /function fingerprint\(/, "Code.gs harus versi sync cepat");
   assert.match(gs, /dilewati\.push/, "Code.gs harus melewati tabel yang tidak berubah");
   assert.match(tutorial, /sync hanya menulis tabel yang berubah/);

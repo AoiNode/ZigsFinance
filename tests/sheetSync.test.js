@@ -81,18 +81,20 @@ test("fallback pull backend lama mempromosikan transaksi remote ke IndexedDB", a
   assert.match(body, /replaceFromStaging\(financeDb, legacyRemoteRows\.length\)/);
 });
 
-test("Apps Script memvalidasi seluruh mutation batch sebelum write pertama", async () => {
+test("Apps Script memvalidasi seluruh mutation batch sebelum batch write pertama", async () => {
   const source = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
   const body = source.match(/function applyMutations\(ss, mutations, payload\) \{[\s\S]*?\n\}/)?.[0] || "";
   const validation = body.indexOf("mutations.forEach(validateMutation)");
-  const firstWrite = body.indexOf("sh.deleteRow");
+  const firstWrite = body.indexOf("writeSheetValues(sh, SHEET_SPECS.transactions, transactionRows)");
   assert.ok(validation >= 0 && firstWrite > validation, "semua mutation harus divalidasi sebelum sheet diubah");
 });
 
-test("capability probe gagal memakai kontrak konservatif untuk request saat ini", async () => {
+test("capability cache menghindari ping rutin tetapi instalasi tanpa cache tetap konservatif", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   const body = app.match(/async function getSyncCapabilities\(\) \{[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(body, /return probed \?/, "probe gagal → [] untuk operasi ini, cache lama hanya untuk UI");
+  assert.match(body, /if \(cached\.length\) return cached/);
+  assert.match(body, /action=ping/, "instalasi tanpa cache tetap melakukan probe");
+  assert.match(body, /return \[\];/, "probe gagal tetap fail conservative ke full sync");
 });
 
 test("client mengirim outbox incremental per batch maksimum 500 dan ack per respons", async () => {

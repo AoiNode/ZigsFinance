@@ -208,33 +208,41 @@ function applyMutations(ss, mutations, payload) {
   try { log.hideSheet(); } catch (_) {}
   var seen = {};
   if (log.getLastRow() > 1) log.getRange(2, 1, log.getLastRow() - 1, 1).getValues().forEach(function(r) { seen[String(r[0])] = true; });
-  var ids = {};
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function(r, i) { ids[String(r[0])] = i + 2; });
+  // Baca transaksi sekali, terapkan seluruh batch di memori, lalu tulis sekali. Versi lama
+  // memanggil setValues/deleteRow per mutasi; puluhan transaksi berarti puluhan round-trip ke
+  // Spreadsheet service dan menjadi bottleneck utama.
+  var transactionRows = [];
+  if (sh.getLastRow() > 1) transactionRows = sh.getRange(2, 1, sh.getLastRow() - 1, SHEET_SPECS.transactions.length).getValues();
+  var rowIndexById = {};
+  transactionRows.forEach(function(row, i) { rowIndexById[String(row[0])] = i; });
   var appliedMutationIds = [];
   var logRows = [];
+  var transactionsChanged = false;
   mutations.forEach(function(m) {
     if (seen[m.mutationId]) { appliedMutationIds.push(m.mutationId); return; }
-    var rowNumber = ids[String(m.id)];
+    var index = rowIndexById[String(m.id)];
     if (m.op === "delete") {
-      if (rowNumber) {
-        sh.deleteRow(rowNumber);
-        Object.keys(ids).forEach(function(id) { if (ids[id] > rowNumber) ids[id]--; });
-        delete ids[String(m.id)];
+      if (index != null) {
+        transactionRows.splice(index, 1);
+        rowIndexById = {};
+        transactionRows.forEach(function(row, i) { rowIndexById[String(row[0])] = i; });
+        transactionsChanged = true;
       }
     } else {
       var record = m.record || {};
       var values = SHEET_SPECS.transactions.map(function(key) { return record[key] == null ? "" : record[key]; });
-      if (rowNumber) sh.getRange(rowNumber, 1, 1, values.length).setValues([values]);
+      if (index != null) transactionRows[index] = values;
       else {
-        rowNumber = sh.getLastRow() + 1;
-        sh.getRange(rowNumber, 1, 1, values.length).setValues([values]);
-        ids[String(m.id)] = rowNumber;
+        rowIndexById[String(m.id)] = transactionRows.length;
+        transactionRows.push(values);
       }
+      transactionsChanged = true;
     }
     seen[m.mutationId] = true;
     appliedMutationIds.push(m.mutationId);
     logRows.push([m.mutationId, new Date().toISOString()]);
   });
+  if (transactionsChanged) writeSheetValues(sh, SHEET_SPECS.transactions, transactionRows);
   if (logRows.length) {
     log.getRange(log.getLastRow() + 1, 1, logRows.length, 2).setValues(logRows);
     bumpDataRevision();
@@ -331,6 +339,17 @@ function writeSheet(sh, header, rows) {
     });
   });
   sh.getRange(2, 1, values.length, header.length).setValues(values);
+}
+
+/* Batch mutasi sudah berbentuk array nilai sesuai header. Satu write untuk semua transaksi,
+   dan clear hanya ekor lama bila batch delete membuat jumlah baris menyusut. */
+function writeSheetValues(sh, header, values) {
+  var oldDataRows = Math.max(0, sh.getLastRow() - 1);
+  sh.getRange(1, 1, 1, header.length).setValues([header]);
+  if (values.length) sh.getRange(2, 1, values.length, header.length).setValues(values);
+  if (oldDataRows > values.length) {
+    sh.getRange(values.length + 2, 1, oldDataRows - values.length, header.length).clearContent();
+  }
 }
 
 function parseBody(e) {

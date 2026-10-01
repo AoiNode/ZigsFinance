@@ -1334,22 +1334,23 @@ async function postSyncWithRetry(appsScriptUrl, body, onRetry) {
 }
 
 async function getSyncCapabilities() {
-  let probed = false;
+  // Endpoint sudah diverifikasi ketika sumber disimpan. Pakai hasil verifikasi itu agar setiap
+  // Sync rutin langsung POST tanpa GET ping tambahan (latensi Google Apps Script terbesar justru
+  // cold-start per request). Jika cache belum ada, baru lakukan probe konservatif satu kali.
+  const cached = Array.isArray(state.settings.syncCapabilities) ? state.settings.syncCapabilities : [];
+  if (cached.length) return cached;
   try {
     const response = await fetchWithTimeout(`${state.settings.appsScriptUrl}?action=ping&ts=${Date.now()}`, { cache: "no-store" }, 15000);
     const data = await response.json();
     if (response.ok && data.ok !== false) {
       state.settings.syncCapabilities = Array.isArray(data.capabilities) ? data.capabilities : [];
       saveState(false);
-      probed = true;
+      return state.settings.syncCapabilities;
     }
   } catch (_) {
-    // Capability probe gagal tidak boleh menggagalkan sync; request memakai kontrak di bawah.
+    // Probe gagal: fail conservative ke full sync untuk backend lama.
   }
-  // Probe GAGAL → request OPERASI INI memakai kontrak backend lama ([]) apa pun isi cache.
-  // Cache lama hanya dipertahankan untuk tampilan UI, bukan untuk memutuskan bentuk request ini
-  // (mis. setelah URL Apps Script berubah atau backend di-rollback).
-  return probed ? (Array.isArray(state.settings.syncCapabilities) ? state.settings.syncCapabilities : []) : [];
+  return [];
 }
 
 async function performGoogleSheetSync() {
