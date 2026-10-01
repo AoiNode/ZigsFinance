@@ -414,6 +414,15 @@ test("Pengaturan hanya menampilkan 5 jejak aktivitas terbaru tanpa pagination", 
     "badge harus menjelaskan jumlah aktivitas terbaru yang benar-benar tampil");
 });
 
+test("Pengaturan hanya menampilkan 3 riwayat sumber terbaru tanpa pagination", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const settingsBody = app.match(/function renderSettings\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(settingsBody, /const recentSourceHistory = s\.sourceHistory\.slice\(0, 3\)/);
+  assert.match(settingsBody, /recentSourceHistory\.map/);
+  assert.doesNotMatch(settingsBody, /paginate\(s\.sourceHistory|historyPage\.controls/);
+  assert.match(settingsBody, /recentSourceHistory\.length\} terbaru/);
+});
+
 test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () => {
   const tutorial = await readFile(new URL("../tutorial.html", import.meta.url), "utf8");
   const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
