@@ -45,7 +45,6 @@ export function parseCsv(text) {
 export const PERIOD_MODES = [
   { key: "1d", short: "1d", label: "hari ini", days: 1 },
   { key: "7d", short: "7d", label: "7 hari terakhir", days: 7 },
-  { key: "30d", short: "30d", label: "30 hari terakhir", days: 30 },
   { key: "1M", short: "1M", label: "bulan ini", calendarMonth: true }
 ];
 
@@ -66,7 +65,7 @@ export function normalizePeriodKey(key) {
 }
 
 export function periodMode(mode) {
-  return PERIOD_MODES.find((option) => option.key === normalizePeriodKey(mode)) || PERIOD_MODES[3];
+  return PERIOD_MODES.find((option) => option.key === normalizePeriodKey(mode)) || PERIOD_MODES[2];
 }
 
 function isoDay(date) {
@@ -77,20 +76,27 @@ function isoDay(date) {
  * Batas rentang: `to` selalu HARI INI, `from` mundur (days - 1) hari.
  * Jam diset 12 siang waktu lokal supaya pergeseran DST tidak menggeser tanggalnya.
  */
-export function periodBounds(mode = "1M", now = new Date()) {
+export function periodBounds(mode = "1M", now = new Date(), selectedMonth = "") {
   const selected = periodMode(mode);
-  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const match = /^(\d{4})-(\d{2})$/.exec(String(selectedMonth));
+  const selectedYear = match ? Number(match[1]) : now.getFullYear();
+  const selectedMonthIndex = match ? Number(match[2]) - 1 : now.getMonth();
+  const isCurrentMonth = selectedYear === now.getFullYear() && selectedMonthIndex === now.getMonth();
+  const base = isCurrentMonth
+    ? new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    : new Date(selectedYear, selectedMonthIndex + 1, 0);
+  const monthStart = new Date(selectedYear, selectedMonthIndex, 1, 12);
   if (selected.calendarMonth) {
-    const start = new Date(base.getFullYear(), base.getMonth(), 1, 12);
-    return { from: isoDay(start), to: isoDay(base) };
+    return { from: isoDay(monthStart), to: isoDay(base) };
   }
   const days = selected.days;
-  const start = new Date(base.getFullYear(), base.getMonth(), base.getDate() - (days - 1), 12);
+  const candidate = new Date(base.getFullYear(), base.getMonth(), base.getDate() - (days - 1), 12);
+  const start = candidate < monthStart ? monthStart : candidate;
   return { from: isoDay(start), to: isoDay(base) };
 }
 
-export function periodRangeLabel(mode = "1M", now = new Date()) {
-  const { from, to } = periodBounds(mode, now);
+export function periodRangeLabel(mode = "1M", now = new Date(), selectedMonth = "") {
+  const { from, to } = periodBounds(mode, now, selectedMonth);
   const start = new Date(`${from}T00:00:00`);
   const end = new Date(`${to}T00:00:00`);
   if (from === to) return `${start.getDate()} ${MONTHS_SHORT[start.getMonth()]} ${start.getFullYear()}`;

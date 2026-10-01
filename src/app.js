@@ -1,7 +1,7 @@
 ﻿// Versi pada impor ini WAJIB ada dan ikut dinaikkan setiap kali utils.js berubah.
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=5";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=6";
 import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, mutationBatches, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=3";
 
 const NAV = [
@@ -63,8 +63,10 @@ const PAGE_SIZE = 10;
 const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1, reportCategories: 1 };
 const dashboardHiddenSeries = new Set();
 const PERIOD_KEY = "finance_os_period_scope";
+const PERIOD_MONTH_KEY = "finance_os_period_month";
 const PENDING_MUTATIONS_KEY = "finance_os_pending_mutations";
 let periodScope = loadPeriodScope();
+let periodMonths = loadPeriodMonths();
 let pendingDeletedTx = null;
 let pendingDeleteTimer = null;
 let quickTxType = "";
@@ -172,14 +174,31 @@ function loadPeriodScope() {
   return scope;
 }
 
+function currentMonthKey(now = new Date()) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function loadPeriodMonths() {
+  const months = { dashboard: currentMonthKey(), reports: currentMonthKey() };
+  try {
+    const raw = JSON.parse(localStorage.getItem(PERIOD_MONTH_KEY) || "{}");
+    Object.keys(months).forEach((key) => {
+      if (/^\d{4}-\d{2}$/.test(String(raw[key] || ""))) months[key] = raw[key];
+    });
+  } catch (_) {}
+  return months;
+}
+
 function savePeriodScope() {
   try {
     localStorage.setItem(PERIOD_KEY, JSON.stringify(periodScope));
   } catch (_) {}
 }
 
-function periodVariant(kind) {
-  return periodScope[kind] === "1M" ? "month" : "rolling";
+function savePeriodMonths() {
+  try {
+    localStorage.setItem(PERIOD_MONTH_KEY, JSON.stringify(periodMonths));
+  } catch (_) {}
 }
 
 function setPeriodScope(kind, mode) {
@@ -192,20 +211,17 @@ function setPeriodScope(kind, mode) {
   render();
 }
 
-function togglePeriodVariant(kind) {
-  if (!Object.hasOwn(periodScope, kind)) return;
-  periodScope[kind] = periodVariant(kind) === "month" ? "30d" : "1M";
+function setPeriodMonth(kind, month) {
+  if (!Object.hasOwn(periodMonths, kind) || !/^\d{4}-\d{2}$/.test(String(month))) return;
+  periodMonths[kind] = month;
   if (kind === "reports") listPages.reportCategories = 1;
-  savePeriodScope();
+  savePeriodMonths();
   render();
 }
 
 function periodSwitch(kind) {
   const active = periodScope[kind];
-  const variant = periodVariant(kind);
-  const finalKey = variant === "month" ? "1M" : "30d";
-  const visibleModes = PERIOD_MODES.filter((option) => option.key === "1d" || option.key === "7d" || option.key === finalKey);
-  return `<div class="period-controls"><button class="period-variant-toggle" type="button" data-period-toggle="${kind}" aria-label="Ganti antara 30 hari dan bulan aktif"><span>${variant === "month" ? "Bulan aktif" : "30 hari"}</span><i aria-hidden="true"></i></button><div class="period-switch" role="group" aria-label="Pilih periode">${visibleModes.map((option) => `<button class="period-option${option.key === active ? " active" : ""}" type="button" data-period-kind="${kind}" data-period-mode="${option.key}" aria-pressed="${option.key === active}">${option.short}</button>`).join("")}</div></div>`;
+  return `<div class="period-controls"><label class="month-picker"><span>Bulan</span><input type="month" data-period-month="${kind}" value="${periodMonths[kind]}" max="${currentMonthKey()}" aria-label="Pilih bulan"></label><div class="period-switch" role="group" aria-label="Pilih periode dalam bulan">${PERIOD_MODES.map((option) => `<button class="period-option${option.key === active ? " active" : ""}" type="button" data-period-kind="${kind}" data-period-mode="${option.key}" aria-pressed="${option.key === active}">${option.short}</button>`).join("")}</div></div>`;
 }
 
 init();
@@ -378,7 +394,12 @@ function bindGlobal() {
     const page = e.target.closest("[data-go-page]")?.dataset.goPage;
     if (page) setPage(page);
   };
-  document.getElementById("content").onclick = (e) => {
+  const contentHost = document.getElementById("content");
+  contentHost.onchange = (e) => {
+    const monthInput = e.target.closest("[data-period-month]");
+    if (monthInput) setPeriodMonth(monthInput.dataset.periodMonth, monthInput.value);
+  };
+  contentHost.onclick = (e) => {
     const payId = e.target.closest("[data-pay]")?.dataset.pay;
     if (payId) {
       const bill = state.bills.find(b => b.id === payId);
@@ -452,11 +473,6 @@ function bindGlobal() {
     const periodOption = e.target.closest("[data-period-kind]");
     if (periodOption) {
       setPeriodScope(periodOption.dataset.periodKind, periodOption.dataset.periodMode);
-      return;
-    }
-    const periodToggle = e.target.closest("[data-period-toggle]");
-    if (periodToggle) {
-      togglePeriodVariant(periodToggle.dataset.periodToggle);
       return;
     }
     const pagination = e.target.closest("[data-list-page]");
@@ -546,9 +562,9 @@ async function render() {
 
 async function renderDashboard() {
   const scope = periodScope.dashboard;
-  const bounds = periodBounds(scope);
+  const bounds = periodBounds(scope, new Date(), periodMonths.dashboard);
   const periodLabel = periodMode(scope).label;
-  const rangeLabel = periodRangeLabel(scope);
+  const rangeLabel = periodRangeLabel(scope, new Date(), periodMonths.dashboard);
   const summary = financeDbReady ? await summaryFromDb(financeDb, bounds) : null;
   const monthlyIncome = summary ? summary.income : sumInPeriod(state.transactions, "income", bounds);
   const monthlyExpense = summary ? summary.expense : sumInPeriod(state.transactions, "expense", bounds);
@@ -912,9 +928,9 @@ function renderGoals() {
 
 async function renderReports() {
   const scope = periodScope.reports;
-  const bounds = periodBounds(scope);
+  const bounds = periodBounds(scope, new Date(), periodMonths.reports);
   const periodLabel = periodMode(scope).label;
-  const rangeLabel = periodRangeLabel(scope);
+  const rangeLabel = periodRangeLabel(scope, new Date(), periodMonths.reports);
   const periodSummary = financeDbReady ? await summaryFromDb(financeDb, bounds) : null;
   const allSummary = financeDbReady ? await summaryFromDb(financeDb, { from: "0000-01-01", to: "9999-12-31" }) : null;
   const periodTransactions = periodSummary ? [] : state.transactions.filter(t => inPeriod(t, bounds));
