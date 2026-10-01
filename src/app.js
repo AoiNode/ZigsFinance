@@ -1,7 +1,7 @@
 ﻿// Versi pada impor ini WAJIB ada dan ikut dinaikkan setiap kali utils.js berubah.
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=3";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=4";
 import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, mutationBatches, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=3";
 
 const NAV = [
@@ -60,7 +60,7 @@ let isSidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "1";
 const loadedPages = new Set();
 const loadingPages = new Set();
 const PAGE_SIZE = 10;
-const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1 };
+const listPages = { transactions: 1, budgets: 1, bills: 1, goals: 1, sourceHistory: 1, reportCategories: 1 };
 const dashboardHiddenSeries = new Set();
 const PERIOD_KEY = "finance_os_period_scope";
 const PENDING_MUTATIONS_KEY = "finance_os_pending_mutations";
@@ -158,8 +158,8 @@ async function persistTransactionMutation(op, record) {
 }
 
 function loadPeriodScope() {
-  // Bawaan 30d — sebelum ini "month", dan 30 hari terakhir adalah padanan terdekatnya.
-  const scope = { dashboard: "30d", reports: "30d" };
+  // Bawaan 1M: tanggal 1 bulan aktif sampai hari ini.
+  const scope = { dashboard: "1M", reports: "1M" };
   try {
     const raw = JSON.parse(localStorage.getItem(PERIOD_KEY) || "{}");
     Object.keys(scope).forEach((key) => {
@@ -183,6 +183,7 @@ function setPeriodScope(kind, mode) {
   if (!PERIOD_MODES.some((option) => option.key === mode)) return;
   if (periodScope[kind] === mode) return;
   periodScope[kind] = mode;
+  if (kind === "reports") listPages.reportCategories = 1;
   savePeriodScope();
   render();
 }
@@ -900,13 +901,14 @@ async function renderReports() {
   const byCategory = periodSummary ? periodSummary.byCategory : {};
   if (!periodSummary) periodTransactions.filter(t => t.type === "expense").forEach(t => byCategory[t.category] = (byCategory[t.category] || 0) + Number(t.amount || 0));
   const rows = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+  const categoryPage = paginate(rows, "reportCategories");
   const periodIncome = periodSummary ? periodSummary.income : sumInPeriod(state.transactions, "income", bounds);
   const periodExpense = periodSummary ? periodSummary.expense : sumInPeriod(state.transactions, "expense", bounds);
   const totalIncome = allSummary ? allSummary.income : sumTx("income");
   const totalExpense = allSummary ? allSummary.expense : sumTx("expense");
   const reportCount = periodSummary ? periodSummary.count : periodTransactions.length;
   const allCount = allSummary ? allSummary.count : state.transactions.length;
-  const categoryTable = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Kategori</th><th>Total</th><th>Porsi</th></tr></thead><tbody>${rows.map(r => `<tr><td>${escapeHtml(r[0])}</td><td>${fmt(r[1])}</td><td>${periodExpense > 0 ? Math.round((r[1] / periodExpense) * 100) : 0}%</td></tr>`).join("")}</tbody></table></div>` : emptyState("Belum ada data laporan", `Tidak ada pengeluaran pada ${periodLabel}. Coba pilih periode lain.`);
+  const categoryTable = rows.length ? `<div class="table-wrap"><table><thead><tr><th>Kategori</th><th>Total</th><th>Porsi</th></tr></thead><tbody>${categoryPage.items.map(r => `<tr><td>${escapeHtml(r[0])}</td><td>${fmt(r[1])}</td><td>${periodExpense > 0 ? Math.round((r[1] / periodExpense) * 100) : 0}%</td></tr>`).join("")}</tbody></table></div><div class="list-foot"><small>${rows.length} kategori · 10 per halaman</small>${categoryPage.controls}</div>` : emptyState("Belum ada data laporan", `Tidak ada pengeluaran pada ${periodLabel}. Coba pilih periode lain.`);
   setContent(`<div class="period-bar report-period"><span class="period-range">${rangeLabel} · ${reportCount} transaksi</span>${periodSwitch("reports")}</div><div class="metrics report-metrics">${metric(`Pemasukan ${periodLabel}`, fmt(periodIncome))}${metric(`Pengeluaran ${periodLabel}`, fmt(periodExpense))}</div><div class="card report-alltime-card"><div class="card-title-row"><div><span class="section-kicker">Sepanjang waktu</span><h3>Total keseluruhan</h3></div><span class="count-chip">${allCount} transaksi</span></div><div class="report-totals"><div><small>Pemasukan</small><strong class="masuk">${fmt(totalIncome)}</strong></div><div><small>Pengeluaran</small><strong class="keluar">${fmt(totalExpense)}</strong></div><div><small>Selisih</small><strong>${fmt(totalIncome - totalExpense)}</strong></div></div></div><div class="card"><div class="card-title-row"><div><span class="section-kicker">${rangeLabel}</span><h3>Pengeluaran teratas per kategori</h3></div></div>${categoryTable}</div><div class="card"><h3>Ekspor / Cadangan</h3><p><small>Ekspor selalu memuat seluruh transaksi, tidak ikut terfilter oleh pilihan periode.</small></p><button id="exportJson" class="btn">Ekspor JSON</button><button id="exportCsv" class="btn">Ekspor CSV</button></div>`);
   document.getElementById("exportJson").onclick = async () => {
     const transactions = financeDbReady ? await getAllTransactions(financeDb) : state.transactions;

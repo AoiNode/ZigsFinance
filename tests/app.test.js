@@ -20,11 +20,12 @@ const DAY = (y, m, d) => new Date(y, m - 1, d, 12);
 /** Jumlah hari dari a sampai b (b - a). */
 const jarakHari = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000);
 
-test("periodBounds memutar: rentang selalu berakhir HARI INI", () => {
+test("1d dan 7d memutar, sedangkan 1M memakai bulan kalender aktif", () => {
   const senin = DAY(2026, 9, 21);
   assert.deepEqual(periodBounds("1d", senin), { from: "2026-09-21", to: "2026-09-21" });
   assert.deepEqual(periodBounds("7d", senin), { from: "2026-09-15", to: "2026-09-21" });
-  assert.deepEqual(periodBounds("30d", senin), { from: "2026-08-23", to: "2026-09-21" });
+  assert.deepEqual(periodBounds("1M", senin), { from: "2026-09-01", to: "2026-09-21" });
+  assert.deepEqual(periodBounds("1M", DAY(2026, 10, 1)), { from: "2026-10-01", to: "2026-10-01" });
 });
 
 test("BUG LAMA: hari Senin tidak lagi menarik pekan ke DEPAN", () => {
@@ -54,38 +55,48 @@ test("rentang memutar aman melewati batas bulan dan tahun", () => {
   assert.deepEqual(periodBounds("7d", DAY(2027, 1, 3)), { from: "2026-12-28", to: "2027-01-03" });
   // 1 Maret di tahun kabisat: mundur 6 hari harus mendarat di 24 Februari
   assert.deepEqual(periodBounds("7d", DAY(2028, 3, 1)), { from: "2028-02-24", to: "2028-03-01" });
-  // 1 Januari: 30 hari terakhir harus masuk ke Desember tahun sebelumnya
-  assert.deepEqual(periodBounds("30d", DAY(2027, 1, 1)), { from: "2026-12-03", to: "2027-01-01" });
+  // Bulan aktif tidak boleh menarik transaksi bulan sebelumnya.
+  assert.deepEqual(periodBounds("1M", DAY(2027, 1, 1)), { from: "2027-01-01", to: "2027-01-01" });
 });
 
 test("label rentang terbaca manusia, termasuk saat melewati tahun", () => {
   const jumat = DAY(2026, 9, 11);
   assert.equal(periodRangeLabel("1d", jumat), "11 Sep 2026");
   assert.equal(periodRangeLabel("7d", jumat), "5\u201311 Sep 2026");
-  assert.equal(periodRangeLabel("30d", jumat), "13 Agu\u201311 Sep 2026");
+  assert.equal(periodRangeLabel("1M", jumat), "1\u201311 Sep 2026");
   // rentang lintas tahun ditulis lengkap supaya tidak terbaca seolah keduanya di tahun yang sama
   assert.equal(periodRangeLabel("7d", DAY(2027, 1, 3)), "28 Des 2026\u20133 Jan 2027");
 });
 
-test("nama pilihan periode: 1d / 7d / 30d", () => {
-  assert.deepEqual(PERIOD_MODES.map((m) => m.short), ["1d", "7d", "30d"]);
-  assert.deepEqual(PERIOD_MODES.map((m) => m.key), ["1d", "7d", "30d"]);
-  assert.deepEqual(PERIOD_MODES.map((m) => m.days), [1, 7, 30]);
+test("nama pilihan periode: 1d / 7d / 1M", () => {
+  assert.deepEqual(PERIOD_MODES.map((m) => m.short), ["1d", "7d", "1M"]);
+  assert.deepEqual(PERIOD_MODES.map((m) => m.key), ["1d", "7d", "1M"]);
+  assert.deepEqual(PERIOD_MODES.map((m) => m.days), [1, 7, undefined]);
   assert.equal(periodMode("7d").label, "7 hari terakhir");
   assert.equal(periodMode("1d").label, "hari ini");
+  assert.equal(periodMode("1M").label, "bulan ini");
   assert.equal(PERIOD_MODES.length, 3);
+});
+
+test("laporan mempaginate pengeluaran kategori sebanyak 10 per halaman", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(app, /reportCategories: 1/);
+  assert.match(app, /const categoryPage = paginate\(rows, "reportCategories"\)/);
+  assert.match(app, /categoryPage\.items\.map/);
+  assert.match(app, /kategori · 10 per halaman/);
 });
 
 test("pilihan lama (day/week/month) ikut dipindahkan, bukan dibuang", () => {
   // Tanpa ini, pengguna yang sudah memilih "bulan" akan diam-diam kembali ke setelan awal.
   assert.equal(normalizePeriodKey("day"), "1d");
   assert.equal(normalizePeriodKey("week"), "7d");
-  assert.equal(normalizePeriodKey("month"), "30d");
+  assert.equal(normalizePeriodKey("month"), "1M");
+  assert.equal(normalizePeriodKey("30d"), "1M", "pilihan 30d lama pindah ke bulan aktif");
   assert.equal(normalizePeriodKey("7d"), "7d", "kunci baru tetap diterima");
   assert.equal(normalizePeriodKey("nonsense"), null);
   assert.equal(normalizePeriodKey(undefined), null);
-  assert.equal(periodMode("month").key, "30d", "periodMode harus ikut memindahkan");
-  assert.equal(periodMode("nonsense").key, "30d", "nilai tidak dikenal jatuh ke bawaan 30d");
+  assert.equal(periodMode("month").key, "1M", "periodMode harus ikut memindahkan");
+  assert.equal(periodMode("nonsense").key, "1M", "nilai tidak dikenal jatuh ke bawaan 1M");
 });
 
 test("sumInPeriod scopes amounts without bleeding across year or period", () => {
@@ -99,8 +110,8 @@ test("sumInPeriod scopes amounts without bleeding across year or period", () => 
   const friday = DAY(2026, 9, 11);
   assert.equal(sumInPeriod(transactions, "expense", periodBounds("1d", friday)), 50000);
   assert.equal(sumInPeriod(transactions, "expense", periodBounds("7d", friday)), 75000);
-  assert.equal(sumInPeriod(transactions, "expense", periodBounds("30d", friday)), 75000);
-  assert.equal(sumInPeriod(transactions, "income", periodBounds("30d", friday)), 200000);
+  assert.equal(sumInPeriod(transactions, "expense", periodBounds("1M", friday)), 75000);
+  assert.equal(sumInPeriod(transactions, "income", periodBounds("1M", friday)), 200000);
 });
 
 test("transaksi masa depan tidak ikut terhitung", () => {
@@ -112,12 +123,12 @@ test("transaksi masa depan tidak ikut terhitung", () => {
     { date: "2026-09-30", type: "expense", amount: 222000 },
   ];
   const friday = DAY(2026, 9, 11);
-  assert.equal(sumInPeriod(transactions, "expense", periodBounds("30d", friday)), 50000);
-  assert.equal(inPeriod({ date: "2026-09-12" }, periodBounds("30d", friday)), false);
+  assert.equal(sumInPeriod(transactions, "expense", periodBounds("1M", friday)), 50000);
+  assert.equal(inPeriod({ date: "2026-09-12" }, periodBounds("1M", friday)), false);
 });
 
 test("inPeriod tolerates timestamps and rejects malformed dates", () => {
-  const bounds = periodBounds("30d", DAY(2026, 9, 11));
+  const bounds = periodBounds("1M", DAY(2026, 9, 11));
   assert.equal(inPeriod({ date: "2026-09-11T08:30:00Z" }, bounds), true);
   assert.equal(inPeriod({ date: "" }, bounds), false);
   assert.equal(inPeriod({}, bounds), false);

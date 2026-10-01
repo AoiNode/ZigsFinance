@@ -45,7 +45,7 @@ export function parseCsv(text) {
 export const PERIOD_MODES = [
   { key: "1d", short: "1d", label: "hari ini", days: 1 },
   { key: "7d", short: "7d", label: "7 hari terakhir", days: 7 },
-  { key: "30d", short: "30d", label: "30 hari terakhir", days: 30 }
+  { key: "1M", short: "1M", label: "bulan ini", calendarMonth: true }
 ];
 
 /**
@@ -53,7 +53,7 @@ export const PERIOD_MODES = [
  * saat aplikasi diperbarui. Tanpa ini, pengguna yang memilih "bulan" akan diam-diam kembali ke
  * setelan awal.
  */
-export const LEGACY_PERIOD_KEYS = { day: "1d", week: "7d", month: "30d" };
+export const LEGACY_PERIOD_KEYS = { day: "1d", week: "7d", month: "1M", "30d": "1M" };
 
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 
@@ -76,14 +76,19 @@ function isoDay(date) {
  * Batas rentang: `to` selalu HARI INI, `from` mundur (days - 1) hari.
  * Jam diset 12 siang waktu lokal supaya pergeseran DST tidak menggeser tanggalnya.
  */
-export function periodBounds(mode = "30d", now = new Date()) {
-  const days = periodMode(mode).days;
+export function periodBounds(mode = "1M", now = new Date()) {
+  const selected = periodMode(mode);
   const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (selected.calendarMonth) {
+    const start = new Date(base.getFullYear(), base.getMonth(), 1, 12);
+    return { from: isoDay(start), to: isoDay(base) };
+  }
+  const days = selected.days;
   const start = new Date(base.getFullYear(), base.getMonth(), base.getDate() - (days - 1), 12);
   return { from: isoDay(start), to: isoDay(base) };
 }
 
-export function periodRangeLabel(mode = "30d", now = new Date()) {
+export function periodRangeLabel(mode = "1M", now = new Date()) {
   const { from, to } = periodBounds(mode, now);
   const start = new Date(`${from}T00:00:00`);
   const end = new Date(`${to}T00:00:00`);
