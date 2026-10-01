@@ -127,6 +127,18 @@ test("iPhone PWA memberi safe-area atas tanpa mengubah Android", async () => {
   assert.match(css, /Android remains unchanged/);
 });
 
+test("zoom mobile dikunci di semua halaman (Android dan iPhone)", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const tutorial = await readFile(new URL("../tutorial.html", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  for (const [name, page] of [["index", html], ["tutorial", tutorial]]) {
+    assert.match(page, /maximum-scale=1/, `${name} harus memblokir maximum-scale`);
+    assert.match(page, /user-scalable=no/, `${name} harus memblokir user-scalable`);
+    assert.match(page, /gesturestart/, `${name} harus memblokir gesture pinch iOS`);
+  }
+  assert.match(css, /@media\(max-width:980px\)\{\s*html,body,\.app-shell,main,button,a,input,select,textarea\{touch-action:manipulation\}/);
+});
+
 test("sumInPeriod scopes amounts without bleeding across year or period", () => {
   const transactions = [
     { date: "2026-09-11", type: "expense", amount: 50000 },
@@ -435,7 +447,7 @@ test("tutorial mobile tidak melebar dan Code.gs selalu versi terbaru", async () 
   const tutorial = await readFile(new URL("../tutorial.html", import.meta.url), "utf8");
   const gs = await readFile(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
 
-  assert.match(tutorial, /width=device-width,initial-scale=1,viewport-fit=cover/);
+  assert.match(tutorial, /width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover/);
   assert.match(tutorial, /env\(safe-area-inset-bottom\)/);
   assert.match(tutorial, /@media\(max-width:480px\)/);
 

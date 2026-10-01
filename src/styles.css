@@ -233,3 +233,8 @@ button:active,.btn:active,.icon-btn:active,.activity-row:active,.chart-row:activ
   }
  }
 }
+
+/* Fixed mobile viewport: prevent double-tap zoom while keeping vertical scrolling. */
+@media(max-width:980px){
+ html,body,.app-shell,main,button,a,input,select,textarea{touch-action:manipulation}
+}
