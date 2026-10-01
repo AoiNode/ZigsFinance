@@ -45,6 +45,7 @@ export function parseCsv(text) {
 export const PERIOD_MODES = [
   { key: "1d", short: "1d", label: "hari ini", days: 1 },
   { key: "7d", short: "7d", label: "7 hari terakhir", days: 7 },
+  { key: "30d", short: "30d", label: "30 hari terakhir", days: 30 },
   { key: "1M", short: "1M", label: "bulan ini", calendarMonth: true }
 ];
 
@@ -53,7 +54,7 @@ export const PERIOD_MODES = [
  * saat aplikasi diperbarui. Tanpa ini, pengguna yang memilih "bulan" akan diam-diam kembali ke
  * setelan awal.
  */
-export const LEGACY_PERIOD_KEYS = { day: "1d", week: "7d", month: "1M", "30d": "1M" };
+export const LEGACY_PERIOD_KEYS = { day: "1d", week: "7d", month: "1M" };
 
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
 
@@ -65,7 +66,7 @@ export function normalizePeriodKey(key) {
 }
 
 export function periodMode(mode) {
-  return PERIOD_MODES.find((option) => option.key === normalizePeriodKey(mode)) || PERIOD_MODES[2];
+  return PERIOD_MODES.find((option) => option.key === normalizePeriodKey(mode)) || PERIOD_MODES[3];
 }
 
 function isoDay(date) {

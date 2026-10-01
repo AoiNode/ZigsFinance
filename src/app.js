@@ -1,7 +1,7 @@
 ﻿// Versi pada impor ini WAJIB ada dan ikut dinaikkan setiap kali utils.js berubah.
 // Service worker di proyek ini cache-first dan berpatokan pada URL: tanpa versi, perubahan di
 // utils.js tidak akan pernah sampai ke pengguna yang sudah memasang PWA-nya.
-import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=4";
+import { parseCsv, validateSheetUrl, PERIOD_MODES, periodMode, periodBounds, periodRangeLabel, sumInPeriod, inPeriod, normalizePeriodKey, syncPayload, AUDIT_LIMIT, trimAuditLog, spreadsheetId, compactId } from "./utils.js?v=5";
 import { openFinanceDb, migrateLegacyTransactions, getAllTransactions, getTransactionPage, getOutbox, mutationBatches, queueMutation, acknowledgeMutations, buildMutation, clearPullStaging, stagePulledRows, replaceFromStaging, validatePulledPage, summaryFromDb } from "./data-store.js?v=3";
 
 const NAV = [
@@ -178,6 +178,10 @@ function savePeriodScope() {
   } catch (_) {}
 }
 
+function periodVariant(kind) {
+  return periodScope[kind] === "1M" ? "month" : "rolling";
+}
+
 function setPeriodScope(kind, mode) {
   if (!Object.hasOwn(periodScope, kind)) return;
   if (!PERIOD_MODES.some((option) => option.key === mode)) return;
@@ -188,9 +192,20 @@ function setPeriodScope(kind, mode) {
   render();
 }
 
+function togglePeriodVariant(kind) {
+  if (!Object.hasOwn(periodScope, kind)) return;
+  periodScope[kind] = periodVariant(kind) === "month" ? "30d" : "1M";
+  if (kind === "reports") listPages.reportCategories = 1;
+  savePeriodScope();
+  render();
+}
+
 function periodSwitch(kind) {
   const active = periodScope[kind];
-  return `<div class="period-switch" role="group" aria-label="Pilih periode">${PERIOD_MODES.map((option) => `<button class="period-option${option.key === active ? " active" : ""}" type="button" data-period-kind="${kind}" data-period-mode="${option.key}" aria-pressed="${option.key === active}">${option.short}</button>`).join("")}</div>`;
+  const variant = periodVariant(kind);
+  const finalKey = variant === "month" ? "1M" : "30d";
+  const visibleModes = PERIOD_MODES.filter((option) => option.key === "1d" || option.key === "7d" || option.key === finalKey);
+  return `<div class="period-controls"><button class="period-variant-toggle" type="button" data-period-toggle="${kind}" aria-label="Ganti antara 30 hari dan bulan aktif"><span>${variant === "month" ? "Bulan aktif" : "30 hari"}</span><i aria-hidden="true"></i></button><div class="period-switch" role="group" aria-label="Pilih periode">${visibleModes.map((option) => `<button class="period-option${option.key === active ? " active" : ""}" type="button" data-period-kind="${kind}" data-period-mode="${option.key}" aria-pressed="${option.key === active}">${option.short}</button>`).join("")}</div></div>`;
 }
 
 init();
@@ -437,6 +452,11 @@ function bindGlobal() {
     const periodOption = e.target.closest("[data-period-kind]");
     if (periodOption) {
       setPeriodScope(periodOption.dataset.periodKind, periodOption.dataset.periodMode);
+      return;
+    }
+    const periodToggle = e.target.closest("[data-period-toggle]");
+    if (periodToggle) {
+      togglePeriodVariant(periodToggle.dataset.periodToggle);
       return;
     }
     const pagination = e.target.closest("[data-list-page]");
